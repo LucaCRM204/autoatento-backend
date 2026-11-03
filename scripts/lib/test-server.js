@@ -19,7 +19,9 @@ async function levantarServer(envExtra = {}) {
   const port = await puertoLibre();
   const logs = [];
   const child = spawn(process.execPath, [path.join(__dirname, '..', '..', 'server.js')], {
-    env: { ...process.env, PORT: String(port), TENANT_CACHE_TTL_MS: '500', NODE_ENV: 'development', ...envExtra },
+    // TZ=UTC como en Railway: mysql2 serializa las fechas de JS en la zona del
+    // proceso y el flujo de aceptación las compara con NOW() de MySQL (UTC).
+    env: { ...process.env, TZ: 'UTC', PORT: String(port), TENANT_CACHE_TTL_MS: '500', NODE_ENV: 'development', ...envExtra },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout.on('data', (d) => logs.push(d.toString()));

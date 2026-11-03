@@ -450,7 +450,8 @@ async function passLeadToNextVendor(io, pool, lead, currentUserId) {
 function startAcceptanceChecker(io, pool) {
   console.log(`⏰ Checker de aceptación iniciado (timeout: ${ACCEPTANCE_TIMEOUT_MINUTES} min)`);
 
-  everyTenant('aceptacion', 30000, async () => {
+  // ACCEPTANCE_CHECK_MS: solo para acortarlo en los tests
+  everyTenant('aceptacion', Number(process.env.ACCEPTANCE_CHECK_MS) || 30000, async () => {
     if (!pool) return;
     
     try {

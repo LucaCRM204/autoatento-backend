@@ -6,12 +6,13 @@ request corre "dentro" de un tenant y `require('../db')` va al pool de ese
 tenant. Un `WHERE` olvidado no puede filtrar datos entre clientes porque cada
 cliente está en otra base.
 
-> Estado: **Fases 1, 2 y 3 terminadas**:
+> Estado: **Fases 1 a 4 terminadas**:
 > - base multi-tenant del backend;
 > - migraciones, panel superadmin y uso mensual;
-> - frontend único y pantalla `/superadmin`.
+> - frontend único y pantalla `/superadmin`;
+> - tests de aislamiento.
 >
-> Quedan los tests formales (Fase 4) y el plan de migración de clientes (Fase 5).
+> Queda el plan de migración de clientes (Fase 5). Cómo correr todo: [README.md](README.md).
 
 > **Comandos en Windows PowerShell 5.** Cada bloque tiene su variante.
 > - **`npm.cmd`, no `npm`:** en PowerShell 5, `npm run x -- --flag` **pierde los
@@ -522,7 +523,40 @@ Usa `TENANT_DB_KEY_ANTERIOR` como key vieja y `TENANT_DB_KEY` como nueva.
 2. Por cada tenant, desde el panel: *Base y migraciones → Cambiar base* y *Secretos* (cada uno).
 3. Las keys de webhooks se recuperan de los Apps Script y de Zapier; la del bot, del `.env` del bot.
 
-## 13. Migrar un cliente existente
+## 13. Tests de aislamiento
+
+`npm test` (`npm.cmd test` en PowerShell) corre `test/aislamiento.test.js` con `node:test` + `supertest` + `socket.io-client`.
+
+**Entorno propio** (`testing/entorno.js`):
+- **Qué crea:** `crm_test_<run>_a` y `crm_test_<run>_b` (slugs `test-<run>-a` / `-b`), con migraciones, owner y datos marcados con el id de la corrida, más un superadmin `test-<run>@autoatento.test`.
+- **Limpieza:** borra todo eso al terminar, y al arrancar limpia restos de corridas cortadas (solo `crm_test_*`, tenants `test-*` y superadmins `test-*@autoatento.test`).
+- **No toca** `tenant-a` ni `tenant-b`.
+
+**Server real:** se levanta en un puerto libre con estas variables (solo para tests):
+- `TENANTS_SOLO_PREFIJO=test-<run>-`: las tareas en segundo plano procesan solo los tenants de la corrida, no los de `dev:seed`;
+- `ACCEPTANCE_CHECK_MS=2000`: el checker de aceptación corre cada 2 s en vez de 30 s;
+- `TZ=UTC`: igual que Railway.
+
+**Qué cubre (51 tests):**
+
+| Área | Casos |
+|---|---|
+| Resolución | Sin `X-Tenant` → 400; inexistente → 404; `/public/tenant` sin secretos |
+| JWT | `tid` firmado; token de A en B y de B en A → 401; token sin `tid` → 401; mismo email en dos tenants da usuarios distintos |
+| Datos | A y B ven solo lo suyo en leads, lead por id, notas, alertas, tareas, `wa_messages`, recordatorios, `agent_actions` y usuarios; un id que solo existe en B da 404 en A; una nota creada en A no aparece en B con el mismo id de lead; la key de webhook de A no sirve en B |
+| Sockets | Token de A pidiendo B → rechazado; sin tenant → rechazado; `lead:created` de A llega a A y no a B; presencia separada |
+| Tareas en segundo plano | El checker de aceptación pasa cada oferta vencida al otro vendedor **de su tenant**; el scanner genera la alerta del recordatorio vencido en su tenant y con sus datos |
+| Módulos | `metas` apagado en B → 403 (y 200 en A) |
+| Suspensión | 402 en B, sockets de B cortados en el momento, reconexión rechazada, A sigue andando, reactivar vuelve a 200 |
+| Superadmin | Sin token → 401; contraseña mala → 401; token de un owner → 401 (con o sin `X-Tenant`); el token del panel no sirve en un CRM; la lista no expone secretos |
+| Tenancy | `db` sin tenant → `NO_TENANT`; `emitTenant` sin tenant descarta; el server no logueó ninguna consulta sin tenant |
+
+**`TZ=UTC` en desarrollo:**
+- **Dónde se nota:** el flujo de aceptación de leads guarda la fecha de vencimiento calculada en JS; mysql2 la serializa en la zona horaria del proceso y después se compara con `NOW()` de MySQL (UTC).
+- **En Railway:** el proceso está en UTC y coincide.
+- **En una PC en hora de Argentina:** sin `TZ=UTC`, cada oferta nace "vencida" y rota sin parar entre vendedores. Por eso `TZ=UTC` está en `.env.example`.
+
+## 14. Migrar un cliente existente
 
 *El paso a paso detallado es de la Fase 5.* Cambios de comportamiento que hay
 que **avisar al cliente** (Fiat primero) cuando se migre:
@@ -551,7 +585,7 @@ que **avisar al cliente** (Fiat primero) cuando se migre:
     - Se puede registrar el tenant sin migrar y correr el dry-run antes.
 11. **Front:** el dominio `crm5alluma.com.ar` pasa al proyecto único de Vercel (sección 7), y el branding se carga en el panel.
 
-## 14. Bot de WhatsApp (fuera de alcance)
+## 15. Bot de WhatsApp (fuera de alcance)
 
 Cada tenant sigue con su bot propio (Baileys en el droplet), configurado con
 `wa_bot_url` y `wa_bot_key`. El bot escribe directo en la base del tenant y le
@@ -568,7 +602,7 @@ Para pasar a un bot multi-tenant haría falta:
 - **Configuración:** prompt e IA del bot por tenant;
 - **Alternativa:** la API oficial de WhatsApp Cloud, con el tenant resuelto por `phone_number_id`.
 
-## 15. Bugs previos detectados
+## 16. Bugs previos detectados
 
 **Corregidos en autoatento y en el repo de producción de Fiat:**
 - `GET /api/leads/unassigned` y `/distribution` quedaban tapadas por `/:id`.
@@ -586,9 +620,8 @@ Para pasar a un bot multi-tenant haría falta:
 - Al desconectarse, el log del socket muestra `Usuario desconectado: undefined` porque el JWT no lleva `name`. Es solo cosmético.
 - En el front de producción de Fiat, el socket solo se conecta si había un token al cargar la página (en autoatento ya está resuelto).
 
-## 16. Pendiente
+## 17. Pendiente
 
-- **Fase 4:** tests automáticos (jest o `node:test` + supertest) a partir de los smokes y la prueba de navegador de la Fase 3.
 - **Fase 5:** plan de migración de Fiat y checklist para comparar los otros clones.
 - **`multi_marca`, `motos` y `scoring`:** los flags existen, pero el CRM base no tiene pantallas para eso (por ejemplo, un selector de marca al cargar un lead). **Decisión: se definen cuando se migre GoldPlan.**
 - **Admin del bot por tenant** (sección 14).

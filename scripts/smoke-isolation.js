@@ -53,7 +53,7 @@ function puertoLibre() {
 async function levantarServer(port) {
   const logs = [];
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, PORT: String(port), TENANT_CACHE_TTL_MS: '500', NODE_ENV: 'development' },
+    env: { ...process.env, TZ: 'UTC', PORT: String(port), TENANT_CACHE_TTL_MS: '500', NODE_ENV: 'development' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout.on('data', (d) => logs.push(d.toString()));

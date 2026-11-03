@@ -7,7 +7,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "setup": "node setup-db.js",
-    "test": "jest",
+    "test": "node --test --test-reporter=spec test/aislamiento.test.js",
     "build": "echo 'No build step required for Node.js backend'",
     "control:init": "node scripts/control-init.js",
     "tenant:add": "node scripts/tenant-add.js",
@@ -36,7 +36,8 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.1",
-    "socket.io-client": "^4.8.1"
+    "socket.io-client": "^4.8.1",
+    "supertest": "^7.3.1"
   },
   "engines": {
     "node": ">=18.0.0"

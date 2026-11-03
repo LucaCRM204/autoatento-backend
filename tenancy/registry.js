@@ -118,9 +118,15 @@ async function getByHost(host) {
   return c.byHost.get(h) || c.byHost.get(h.replace(/^www\./, '')) || null;
 }
 
+/**
+ * Tenants activos. Con TENANTS_SOLO_PREFIJO (solo tests), únicamente los que
+ * tienen ese prefijo de slug: así un server de prueba no procesa los loops
+ * de otros tenants de la misma base de desarrollo.
+ */
 async function listActive() {
   const c = await ensure();
-  return c.list.filter((t) => t.estado === 'activo');
+  const prefijo = process.env.TENANTS_SOLO_PREFIJO;
+  return c.list.filter((t) => t.estado === 'activo' && (!prefijo || t.slug.startsWith(prefijo)));
 }
 
 async function listAll() {
