@@ -2,11 +2,13 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const pool = require('../db');
+const { cookieName } = require('../tenancy/middleware');
 const router = express.Router();
 
-// Middleware: valida token desde cookie o header
+// Middleware: valida token desde header o cookie del tenant.
+// (resolveTenant ya rechazó con 401 los tokens de otro tenant o sin tid)
 function requireAuth(req, res, next) {
-  const token = req.cookies?.session || (req.headers.authorization || '').replace(/^Bearer\s+/, '');
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '') || req.cookies?.[cookieName(req.tenant.slug)];
   if (!token) return res.status(401).json({ error: 'no_token' });
 
   try {
@@ -33,12 +35,14 @@ router.post('/login', async (req, res) => {
     if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' });
 
     const token = jwt.sign(
-      { uid: user.id, role: user.role, id: user.id, email: user.email, active: user.active },
+      // tid: tenant de la sesión (se valida en cada request y en el handshake del socket)
+      { uid: user.id, role: user.role, id: user.id, email: user.email, active: user.active, tid: req.tenant.id },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
 
-    res.cookie('session', token, {
+    // Un solo backend para todos los dominios: la cookie lleva el slug para no pisar la de otro tenant
+    res.cookie(cookieName(req.tenant.slug), token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'none',
@@ -76,8 +80,8 @@ router.get('/me', requireAuth, (req, res) => {
 });
 
 // POST /api/auth/logout
-router.post('/logout', (_req, res) => {
-  res.clearCookie('session', { path: '/' });
+router.post('/logout', (req, res) => {
+  res.clearCookie(cookieName(req.tenant.slug), { path: '/' });
   res.json({ ok: true });
 });
 
