@@ -11,9 +11,12 @@ const llm = require('./llm');
 const tools = require('./tools');
 const config = require('./config');
 
+const pool = require('../db');
+const { currentTenant } = require('../tenancy/context');
+const { tenantNombre, tenantConfig } = require('../tenancy/settings');
+
 const MAX_STEPS = 8;
-let pool = null;
-function init(p) { pool = p; }
+function init() { /* compatibilidad */ }
 
 const EVENTOS = {
   'lead.created': (p) =>
@@ -38,9 +41,10 @@ async function systemPrompt() {
   const aprob = cfg.mode === 'shadow'
     ? 'El sistema está en modo sombra: TODAS tus acciones de escritura quedan pendientes de aprobación de un gerente. Proponé igual lo que harías.'
     : `Estas acciones quedan pendientes de aprobación de un gerente: ${cfg.tools_con_aprobacion.join(', ') || 'ninguna'}. El resto se ejecuta al instante.`;
-  return `Sos el agente operativo del CRM de Auto del Sol Fiat, una concesionaria de Argentina. No conversás con clientes (eso lo hacen el bot y los vendedores): trabajás para el equipo comercial y, como mucho, mandás seguimientos puntuales por WhatsApp. Tu objetivo es que ningún lead se enfríe por falta de seguimiento.
+  const pais = tenantConfig('pais', null, 'Argentina');
+  return `Sos el agente operativo del CRM de ${tenantNombre(currentTenant())}, una concesionaria de ${pais}. No conversás con clientes (eso lo hacen el bot y los vendedores): trabajás para el equipo comercial y, como mucho, mandás seguimientos puntuales por WhatsApp. Tu objetivo es que ningún lead se enfríe por falta de seguimiento.
 
-Ahora es ${ahora.iso} (hora Argentina). Horario comercial: ${cfg.horario_inicio}:00 a ${cfg.horario_fin}:00. Nunca programes recordatorios fuera de ese horario ni en domingo.
+Ahora es ${ahora.iso} (hora local). Horario comercial: ${cfg.horario_inicio}:00 a ${cfg.horario_fin}:00. Nunca programes recordatorios fuera de ese horario ni en domingo.
 
 Estados posibles: ${tools.ESTADOS.join(', ')}. "rechazado_supervisor" no lo tocás nunca.
 

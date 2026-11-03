@@ -7,25 +7,39 @@
  * a Chat Completions con tool calling. Así se cambia de proveedor sin tocar
  * nada más.
  *
- * Variables:
+ * Multi-tenant: proveedor, modelo y key salen del tenant actual
+ * (tenants.config.agent_provider / agent_model / openai_api_key /
+ * anthropic_api_key, las keys cifradas). Si el tenant no tiene key propia,
+ * se usan las variables globales:
  *   OPENAI_API_KEY     -> usa OpenAI (la misma key de los bots de WhatsApp)
  *   ANTHROPIC_API_KEY  -> usa Anthropic
  *   AGENT_PROVIDER     -> 'openai' | 'anthropic' para forzar uno si están las dos
  *   AGENT_MODEL        -> modelo (default: gpt-4o-mini en OpenAI, claude-sonnet-5-5 en Anthropic)
  */
 const axios = require('axios');
+const { tenantConfig, tenantSecret } = require('../tenancy/settings');
 
-const PROVIDER = (process.env.AGENT_PROVIDER ||
-  (process.env.OPENAI_API_KEY ? 'openai' : process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai')).toLowerCase();
+const KEY_VARS = { openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY' };
+const SECRETOS = { openai: 'openai_api_key', anthropic: 'anthropic_api_key' };
 
-const MODEL = process.env.AGENT_MODEL || (PROVIDER === 'anthropic' ? 'claude-sonnet-5-5' : 'gpt-4o-mini');
-const KEY_VAR = PROVIDER === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
+/** { provider, model, key, keyVar } para el tenant actual (o globales si no hay tenant). */
+function settings() {
+  const propias = { openai: tenantSecret(SECRETOS.openai), anthropic: tenantSecret(SECRETOS.anthropic) };
+  const elegido = tenantConfig('agent_provider') ||
+    (propias.openai ? 'openai' : propias.anthropic ? 'anthropic' : null) ||
+    process.env.AGENT_PROVIDER ||
+    (process.env.OPENAI_API_KEY ? 'openai' : process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai');
+  const provider = String(elegido).toLowerCase() === 'anthropic' ? 'anthropic' : 'openai';
+  const model = tenantConfig('agent_model', 'AGENT_MODEL') || (provider === 'anthropic' ? 'claude-sonnet-5-5' : 'gpt-4o-mini');
+  const key = propias[provider] || process.env[KEY_VARS[provider]] || '';
+  return { provider, model, key, keyVar: KEY_VARS[provider] };
+}
 
 const RETRY_STATUS = [408, 409, 429, 500, 502, 503, 504, 529];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const hasKey = () => !!process.env[KEY_VAR];
+const hasKey = () => !!settings().key;
 
-async function post(url, body, headers) {
+async function post(url, body, headers, PROVIDER) {
   let lastErr;
   for (let intento = 0; intento < 4; intento++) {
     try {
@@ -48,11 +62,12 @@ async function post(url, body, headers) {
 }
 
 // ---------- Anthropic (formato nativo) ----------
-function anthropic({ system, messages, tools, maxTokens }) {
+function anthropic({ system, messages, tools, maxTokens }, s) {
   return post(
     'https://api.anthropic.com/v1/messages',
-    { model: MODEL, max_tokens: maxTokens, system, messages, tools },
-    { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }
+    { model: s.model, max_tokens: maxTokens, system, messages, tools },
+    { 'x-api-key': s.key, 'anthropic-version': '2023-06-01' },
+    s.provider
   );
 }
 
@@ -100,26 +115,34 @@ function fromOpenAI(data) {
   };
 }
 
-async function openai({ system, messages, tools, maxTokens }) {
+async function openai({ system, messages, tools, maxTokens }, s) {
   const data = await post(
     'https://api.openai.com/v1/chat/completions',
     {
-      model: MODEL,
+      model: s.model,
       max_completion_tokens: maxTokens,
       messages: toOpenAIMessages(system, messages),
       tools: tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } })),
       tool_choice: 'auto',
       parallel_tool_calls: true,
     },
-    { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+    { Authorization: `Bearer ${s.key}` },
+    s.provider
   );
   return fromOpenAI(data);
 }
 
 async function createMessage({ system, messages, tools, maxTokens = 1500 }) {
-  return PROVIDER === 'anthropic'
-    ? anthropic({ system, messages, tools, maxTokens })
-    : openai({ system, messages, tools, maxTokens });
+  const s = settings();
+  return s.provider === 'anthropic'
+    ? anthropic({ system, messages, tools, maxTokens }, s)
+    : openai({ system, messages, tools, maxTokens }, s);
 }
 
-module.exports = { createMessage, hasKey, MODEL, PROVIDER, KEY_VAR };
+// MODEL / PROVIDER / KEY_VAR se calculan para el tenant del contexto en cada acceso.
+module.exports = {
+  createMessage, hasKey, settings,
+  get MODEL() { return settings().model; },
+  get PROVIDER() { return settings().provider; },
+  get KEY_VAR() { return settings().keyVar; },
+};

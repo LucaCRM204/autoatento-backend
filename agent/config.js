@@ -40,21 +40,25 @@ const VALIDATORS = {
   instrucciones_extra: (v) => typeof v === 'string' && v.length <= 2000,
 };
 
-let pool = null;
-let cache = null;
-let cacheAt = 0;
+// Multi-tenant: pool es el proxy (base del tenant actual) y la caché es por tenant.
+const pool = require('../db');
+const { perTenant } = require('../tenancy/state');
+const { nowInTz } = require('../tenancy/time');
+
+const cacheDe = perTenant('agent.config', () => ({ value: null, at: 0 }));
 const TTL = 15 * 1000;
 
-function init(p) { pool = p; }
+function init() { /* compatibilidad: ya no hace falta pasar el pool */ }
 
 async function get() {
-  if (cache && Date.now() - cacheAt < TTL) return cache;
+  const c = cacheDe();
+  if (c.value && Date.now() - c.at < TTL) return c.value;
   const [rows] = await pool.query('SELECT k, v FROM agent_config');
   const cfg = { ...DEFAULTS };
   for (const r of rows) if (r.k in DEFAULTS && r.v !== null) cfg[r.k] = r.v;
-  cache = parse(cfg);
-  cacheAt = Date.now();
-  return cache;
+  c.value = parse(cfg);
+  c.at = Date.now();
+  return c.value;
 }
 
 function parse(raw) {
@@ -90,7 +94,7 @@ async function set(partial, userId) {
       [k, v, userId || null]
     );
   }
-  cache = null;
+  cacheDe().value = null;
   return { ok: true, config: await get() };
 }
 
@@ -106,16 +110,12 @@ async function setCursor(name, value) {
   );
 }
 
-/** Hora de Argentina (UTC-3 fijo, sin horario de verano). */
+/**
+ * Hora local del tenant (tenants.config.timezone, default Buenos Aires).
+ * Mantiene el nombre nowArg() por compatibilidad: { date, time, hour, weekday, iso }.
+ */
 function nowArg() {
-  const d = new Date(Date.now() - 3 * 60 * 60 * 1000);
-  return {
-    date: d.toISOString().slice(0, 10),
-    time: d.toISOString().slice(11, 16),
-    hour: d.getUTCHours(),
-    weekday: d.getUTCDay(),
-    iso: d.toISOString().slice(0, 16).replace('T', ' '),
-  };
+  return nowInTz();
 }
 
 function enHorario(cfg) {

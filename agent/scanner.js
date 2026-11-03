@@ -20,14 +20,18 @@
  * Los dos últimos solo se detectan en horario comercial.
  */
 const config = require('./config');
+const pool = require('../db');
+const { emitTenant } = require('../tenancy/realtime');
+const { perTenant } = require('../tenancy/state');
+const { currentTenant } = require('../tenancy/context');
+const { agentUser } = require('./state');
 
-let pool = null;
-let agentUserId = null;
-let io = null;
-function init(p, uid, socketIo) { pool = p; agentUserId = uid; io = socketIo || null; }
+// Multi-tenant: pool y usuario del agente son los del tenant del contexto.
+const agentUserId = () => agentUser().id;
+function init() { /* compatibilidad */ }
 
 /**
- * Recordatorios que vencieron (fecha + hora en horario de Argentina) y todavía
+ * Recordatorios que vencieron (fecha + hora local del tenant) y todavía
  * no avisaron: alerta al vendedor del lead (o a quien lo creó). Una sola vez
  * por recordatorio; solo los de las últimas 48 h para no inundar con viejos.
  */
@@ -51,8 +55,8 @@ async function avisarRecordatoriosVencidos() {
     await pool.execute(
       `INSERT INTO alertas (user_id, type, message, lead_id, related_id, timestamp) VALUES (?, 'recordatorio', ?, ?, ?, NOW())`,
       [r.destinatario, msg, r.lead_id, r.id]);
-    if (io) {
-      io.emit('notification', {
+    {
+      emitTenant('notification', {
         id: `rec-${r.id}`, type: 'alert', title: '⏰ Recordatorio', message: msg,
         timestamp: new Date().toISOString(), read: false, severity: 'info', leadId: r.lead_id, targetUserId: r.destinatario,
       });
@@ -94,7 +98,7 @@ async function scanCambiosEstado(activo) {
   let n = 0;
   for (const h of rows) {
     cursor = h.id;
-    if (!activo || h.user_id === agentUserId) continue;
+    if (!activo || h.user_id === agentUserId()) continue;
     const campo = String(h.field_name || '').toLowerCase();
     if (campo === 'estado' && /^no_contesta_[123]$/.test(h.new_value)) {
       if (await enqueue('lead.no_contesta', h.lead_id, { estado: h.new_value }, `nocontesta:${h.id}`)) n++;
@@ -115,7 +119,7 @@ async function scanSLA(cfg) {
         AND NOT EXISTS (SELECT 1 FROM call_logs c WHERE c.lead_id = l.id AND c.created_at >= l.assigned_at)
         AND NOT EXISTS (SELECT 1 FROM notas_internas n WHERE n.lead_id = l.id AND n.user_id <> ? AND n.timestamp >= l.assigned_at)
         AND NOT EXISTS (SELECT 1 FROM wa_messages w WHERE w.lead_id = l.id AND w.direction = 'out' AND w.sent_by = 'vendedor' AND w.created_at >= l.assigned_at)
-      ORDER BY l.assigned_at LIMIT 50`, [sla, agentUserId]);
+      ORDER BY l.assigned_at LIMIT 50`, [sla, agentUserId()]);
   let n = 0;
   for (const l of rows) {
     const ts = new Date(l.assigned_at).getTime();
@@ -176,15 +180,17 @@ async function scanRespuestas(activo) {
   return n;
 }
 
-let corriendo = false;
+const corrida = perTenant('agent.scanner', () => ({ corriendo: false }));
 async function tick() {
-  if (corriendo) return;
-  corriendo = true;
+  const st = corrida();
+  if (st.corriendo) return;
+  st.corriendo = true;
   try {
     const vencidos = await avisarRecordatoriosVencidos().catch((e) => { console.error('[agente] recordatorios vencidos:', e.message); return 0; });
     if (vencidos) console.log(`⏰ ${vencidos} recordatorios vencidos avisados`);
     const cfg = await config.get();
-    const activo = cfg.mode !== 'off';
+    // Sin el módulo agente_ia el tenant solo recibe los avisos de recordatorios
+    const activo = cfg.mode !== 'off' && !!currentTenant()?.modulos?.agente_ia;
     const nuevos = await scanNuevos(activo);
     const estados = await scanCambiosEstado(activo);
     const respuestas = await scanRespuestas(activo);
@@ -196,9 +202,9 @@ async function tick() {
     const total = nuevos + estados + respuestas + sla + estancados;
     if (total) console.log(`🤖 Eventos: ${nuevos} nuevos, ${estados} no contesta, ${respuestas} respuestas, ${sla} SLA, ${estancados} estancados`);
   } catch (e) {
-    console.error('[agente] scanner:', e.message);
+    console.error(`[agente] scanner [${currentTenant()?.slug}]:`, e.message);
   } finally {
-    corriendo = false;
+    st.corriendo = false;
   }
 }
 

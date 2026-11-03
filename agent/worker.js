@@ -2,7 +2,8 @@
  * ============================================
  * AGENTE IA — WORKER DE LA COLA
  * ============================================
- * Procesa agent_events de a uno (una sola instancia en Railway). Reintenta
+ * Procesa agent_events de a uno (una sola instancia en Railway), en el
+ * contexto de cada tenant (agent/index.js lo corre con everyTenant). Reintenta
  * hasta 3 veces con espera creciente si falla la API. Respeta el tope
  * diario de corridas y el modo off.
  */
@@ -10,9 +11,12 @@ const config = require('./config');
 const llm = require('./llm');
 const runner = require('./runner');
 
-let pool = null;
-let avisoSinKey = false;
-function init(p) { pool = p; }
+const pool = require('../db');
+const { perTenant } = require('../tenancy/state');
+const { currentTenant } = require('../tenancy/context');
+
+const estado = perTenant('agent.worker', () => ({ corriendo: false, avisoSinKey: false }));
+function init() { /* compatibilidad */ }
 
 async function finish(id, status, extra = {}) {
   await pool.execute(
@@ -28,7 +32,7 @@ async function procesar(ev) {
   const cfg = await config.get();
   if (cfg.mode === 'off') return finish(ev.id, 'skipped', { error: 'Agente apagado' });
   if (!llm.hasKey()) {
-    if (!avisoSinKey) { console.warn(`⚠️  Agente IA: falta ${llm.KEY_VAR}, los eventos se descartan`); avisoSinKey = true; }
+    if (!estado().avisoSinKey) { console.warn(`⚠️  Agente IA [${currentTenant()?.slug}]: falta ${llm.KEY_VAR}, los eventos se descartan`); estado().avisoSinKey = true; }
     return finish(ev.id, 'skipped', { error: `Falta ${llm.KEY_VAR}` });
   }
   const [[{ hoy }]] = await pool.query('SELECT COUNT(*) AS hoy FROM agent_runs WHERE created_at >= CURDATE()');
@@ -46,10 +50,10 @@ async function procesar(ev) {
   }
 }
 
-let corriendo = false;
 async function tick() {
-  if (corriendo) return;
-  corriendo = true;
+  const st = estado();
+  if (st.corriendo) return;
+  st.corriendo = true;
   try {
     const [rows] = await pool.query(
       `SELECT * FROM agent_events
@@ -57,9 +61,9 @@ async function tick() {
         ORDER BY (type = 'manual') DESC, id LIMIT 5`);
     for (const ev of rows) await procesar(ev);
   } catch (e) {
-    console.error('[agente] worker:', e.message);
+    console.error(`[agente] worker [${currentTenant()?.slug}]:`, e.message);
   } finally {
-    corriendo = false;
+    st.corriendo = false;
   }
 }
 
@@ -67,7 +71,7 @@ async function tick() {
 async function recuperarColgados() {
   const [r] = await pool.query(
     "UPDATE agent_events SET status = 'pending' WHERE status = 'processing'");
-  if (r.affectedRows) console.log(`🤖 ${r.affectedRows} eventos colgados devueltos a la cola`);
+  if (r.affectedRows) console.log(`🤖 [${currentTenant()?.slug}] ${r.affectedRows} eventos colgados devueltos a la cola`);
   await pool.query(
     "UPDATE agent_runs SET status = 'error', error = 'Interrumpida por reinicio', finished_at = NOW() WHERE status = 'running'");
 }

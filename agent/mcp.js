@@ -8,17 +8,20 @@
  * acciones de escritura respetan modo y aprobaciones, y quedan registradas
  * con source = 'mcp'.
  *
- * Autenticación: header  Authorization: Bearer <AGENT_MCP_KEY>
- * Si AGENT_MCP_KEY no está definida, el endpoint responde 404.
+ * Multi-tenant: URL /api/t/<slug>/mcp (o /mcp con header X-Tenant).
+ * Autenticación: header  Authorization: Bearer <agent_mcp_key del tenant>
+ * (tenants.config.agent_mcp_key, cifrada). Sin fallback a una key global:
+ * si el tenant no tiene key, el endpoint responde 404.
  */
 const crypto = require('crypto');
 const router = require('express').Router();
 const tools = require('./tools');
+const { tenantSecret, tenantNombre } = require('../tenancy/settings');
 
 const PROTOCOLOS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 function autorizado(req) {
-  const key = process.env.AGENT_MCP_KEY;
+  const key = tenantSecret('agent_mcp_key');
   if (!key) return null;
   const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '') || req.headers['x-api-key'] || '';
   const a = Buffer.from(String(token));
@@ -39,8 +42,8 @@ async function handle(msg) {
       return ok(id, {
         protocolVersion: PROTOCOLOS.includes(params.protocolVersion) ? params.protocolVersion : PROTOCOLOS[0],
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'autodelsol-fiat-crm', version: '1.0.0' },
-        instructions: 'CRM de Auto del Sol Fiat. Consultá con get_lead / search_leads / list_vendedores / list_planes. Las acciones de escritura pueden quedar pendientes de aprobación de un gerente: si la respuesta trae queued: true, avisalo así.',
+        serverInfo: { name: 'autoatento-crm', version: '2.0.0' },
+        instructions: `CRM de ${tenantNombre()}. Consultá con get_lead / search_leads / list_vendedores / list_planes. Las acciones de escritura pueden quedar pendientes de aprobación de un gerente: si la respuesta trae queued: true, avisalo así.`,
       });
     case 'ping':
       return ok(id, {});

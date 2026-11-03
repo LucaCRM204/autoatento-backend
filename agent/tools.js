@@ -16,10 +16,13 @@
  */
 const axios = require('axios');
 const config = require('./config');
+const db = require('../db');
+const { emitTenant } = require('../tenancy/realtime');
+const { waBot } = require('../tenancy/settings');
+const agentState = require('./state');
 
-// Bot de WhatsApp de Fiat (droplet). Ver src/routes/agent.js del bot.
-const WA_BOT_URL = (process.env.WA_BOT_URL || 'https://api.crmalluma.com.ar/wa-fiat').replace(/\/$/, '');
-const WA_BOT_KEY = process.env.WA_BOT_KEY || '';
+// Bot de WhatsApp del tenant (tenants.config.wa_bot_url / wa_bot_key, ver
+// tenancy/settings.waBot). Ver src/routes/agent.js del bot.
 
 const ESTADOS = [
   'nuevo', 'contactado', 'interesado', 'negociacion', 'vendido', 'perdido',
@@ -27,8 +30,14 @@ const ESTADOS = [
 ];
 const ESTADOS_CERRADOS = ['vendido', 'perdido', 'numero_invalido', 'rechazado_supervisor'];
 
-let ctx = { pool: null, io: null, agentUser: null };
-function init(c) { ctx = { ...ctx, ...c }; }
+// Multi-tenant: ctx resuelve todo contra el tenant del contexto actual.
+// Se mantiene la forma ctx.pool / ctx.io / ctx.agentUser para no tocar cada herramienta.
+const ctx = {
+  get pool() { return db; },
+  io: { emit: (evento, data) => emitTenant(evento, data) },
+  get agentUser() { return agentState.agentUser(); },
+};
+function init() { /* compatibilidad */ }
 
 // ---------- helpers ----------
 const cut = (s, n = 400) => (s == null ? s : String(s).length > n ? String(s).slice(0, n) + '…' : String(s));
@@ -202,7 +211,7 @@ const TOOLS = [
   {
     name: 'list_planes',
     readOnly: true,
-    description: 'Grilla de modelos/planes Fiat cargada en el CRM (precio contado, anticipo, cuotas). Usala para no inventar precios.',
+    description: 'Grilla de modelos/planes cargada en el CRM (precio contado, anticipo, cuotas). Usala para no inventar precios.',
     input_schema: { type: 'object', properties: {} },
     async run() {
       const [rows] = await ctx.pool.execute(
@@ -234,7 +243,7 @@ const TOOLS = [
   {
     name: 'create_recordatorio',
     readOnly: false,
-    description: 'Crea un recordatorio en el lead; le aparece al vendedor asignado en su calendario. Fecha y hora en horario de Argentina, siempre a futuro.',
+    description: 'Crea un recordatorio en el lead; le aparece al vendedor asignado en su calendario. Fecha y hora local de la concesionaria, siempre a futuro.',
     input_schema: {
       type: 'object',
       properties: {
@@ -248,7 +257,7 @@ const TOOLS = [
     async run({ lead_id, fecha, hora, descripcion }) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha) || !/^\d{2}:\d{2}$/.test(hora)) fail('Formato: fecha YYYY-MM-DD y hora HH:MM');
       const ahora = config.nowArg();
-      if (`${fecha} ${hora}` <= ahora.iso) fail(`La fecha tiene que ser posterior a ${ahora.iso} (hora Argentina)`);
+      if (`${fecha} ${hora}` <= ahora.iso) fail(`La fecha tiene que ser posterior a ${ahora.iso} (hora local)`);
       const lead = await getLeadRow(lead_id);
       if (!lead) fail(`No existe el lead #${lead_id}`);
       const [dup] = await ctx.pool.execute(
@@ -371,7 +380,8 @@ TOOLS.push({
     const texto = String(mensaje || '').trim();
     if (!texto) fail('El mensaje está vacío');
     if (texto.length > 500) fail('Máximo 500 caracteres');
-    if (!WA_BOT_KEY) fail('Falta WA_BOT_KEY en el backend: no se puede mandar WhatsApp');
+    const bot = waBot();
+    if (!bot.url || !bot.key) fail('El bot de WhatsApp no está configurado para esta cuenta: no se puede mandar WhatsApp');
     const cfg = await config.get();
     if (!config.enHorario(cfg)) fail('Fuera del horario comercial: aprobalo dentro del horario');
 
@@ -393,8 +403,8 @@ TOOLS.push({
     if (rec[0].n) fail('Ya se le mandó un seguimiento en las últimas 48 h');
 
     try {
-      await axios.post(`${WA_BOT_URL}/api/agent/send`, { userId, phone, texto },
-        { headers: { 'x-agent-key': WA_BOT_KEY }, timeout: 20000 });
+      await axios.post(`${bot.url}/api/agent/send`, { userId, phone, texto },
+        { headers: { 'x-agent-key': bot.key }, timeout: 20000 });
     } catch (e) {
       fail(`El bot no pudo mandarlo: ${e.response?.data?.error || e.message}`);
     }
@@ -505,7 +515,7 @@ module.exports = {
   init, definitions, executeTool, approveAction, rejectAction,
   getLeadContext: (id) => BY_NAME.get_lead.run({ lead_id: id }),
   isReadOnly: (name) => !!BY_NAME[name]?.readOnly,
-  agentUserId: () => ctx.agentUser?.id,
+  agentUserId: () => agentState.agentUser().id,
   has: (name) => !!BY_NAME[name],
   ESTADOS, ESTADOS_CERRADOS,
 };
