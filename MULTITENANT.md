@@ -146,7 +146,7 @@ No hay ninguna marca hardcodeada:
 | `asignar_tareas` | prendido | `/api/tareas` | Menú "Asignar Tareas" (Mis Tareas sigue, con los recordatorios) |
 | `ranking` | prendido | — | Menú "Ranking" |
 | `analytics` | prendido | — | Menú "Análisis Diario" |
-| `multi_marca`, `motos`, `scoring` | apagado | — | Todavía sin UI propia en el CRM base (flags reservados para los clones que los usan) |
+| `multi_marca`, `motos`, `scoring` | apagado | — | Sin UI en el CRM base. **Se definen al migrar GoldPlan** (qué pantallas y reglas activa cada uno); hasta entonces son flags reservados |
 
 ## 4. Tiempo real (Socket.io)
 
@@ -575,18 +575,20 @@ Para pasar a un bot multi-tenant haría falta:
 - `GET /api/activity/reassignments` daba 500 en MySQL 8.0.22 o posterior (`LIMIT ?` con `execute()`).
 - `CallPanel.tsx` hacía POST a `/api/api/calls` (404 silencioso).
 
-**Corregidos solo en autoatento** (en el front de producción de Fiat siguen igual):
-- `DistribucionLeads.tsx` llamaba a `/api/api/distribution`.
-- `LeadAcceptanceModal.tsx` usaba URLs relativas (`/api/leads/...`), que van al dominio del front y no al backend.
+- `DistribucionLeads.tsx` llamaba a `/api/api/distribution` (el panel de reparto de "Mi Equipo" daba 404).
+- `LeadAcceptanceModal.tsx` usaba URLs relativas (`/api/leads/...`), que iban al dominio del front. Ojo: ese componente no está montado en el CRM, así que el flujo de aceptar/rechazar ofertas no se usa hoy.
+
+**Corregidos solo en autoatento:**
+- `POST /api/leads` sin `modelo` respondía 500; ahora responde 400 "Faltan datos obligatorios: modelo".
+- Un login con contraseña mala recargaba la página (`api.ts` recargaba ante cualquier 401) y el error casi no se veía; ahora se muestra "Credenciales inválidas".
 
 **Pendientes:**
-- `POST /api/leads` sin `modelo` responde 500 (`modelo` queda `undefined` en el INSERT). El front siempre lo manda.
 - Al desconectarse, el log del socket muestra `Usuario desconectado: undefined` porque el JWT no lleva `name`. Es solo cosmético.
-- En el CRM original, `api.ts` recarga la página ante cualquier 401, incluido un login con contraseña mala, así que el mensaje de error casi no se ve.
+- En el front de producción de Fiat, el socket solo se conecta si había un token al cargar la página (en autoatento ya está resuelto).
 
 ## 16. Pendiente
 
 - **Fase 4:** tests automáticos (jest o `node:test` + supertest) a partir de los smokes y la prueba de navegador de la Fase 3.
 - **Fase 5:** plan de migración de Fiat y checklist para comparar los otros clones.
-- **UI para `multi_marca`, `motos` y `scoring`:** los flags existen, pero el CRM base no tiene pantallas para eso (por ejemplo, un selector de marca al cargar un lead).
+- **`multi_marca`, `motos` y `scoring`:** los flags existen, pero el CRM base no tiene pantallas para eso (por ejemplo, un selector de marca al cargar un lead). **Decisión: se definen cuando se migre GoldPlan.**
 - **Admin del bot por tenant** (sección 14).

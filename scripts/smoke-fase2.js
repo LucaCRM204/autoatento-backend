@@ -32,7 +32,7 @@ const { seed, borrarTenant } = require('./dev-seed');
 const { levantarServer, sleep } = require('./lib/test-server');
 
 const PASSWORD = process.env.DEV_TENANT_PASSWORD;
-const SA_EMAIL = 'superadmin@demo.test';
+const SA_EMAIL = 'smoke-superadmin@demo.test'; // propio: no pisa el superadmin de desarrollo
 const SA_PASSWORD = `${PASSWORD}-superadmin`;
 const SERVER_ENV = { SUSPENSION_WATCH_MS: '1500', AGENT_DISABLED: '1' };
 const urlB = () => env.withDatabase(env.tenantServerUrl(), provision.schemaName('tenant-b'));

@@ -307,12 +307,16 @@ router.post('/', authenticateToken, async (req, res) => {
       assigned_to = null
     } = req.body;
 
-    if (!nombre || !telefono) {
+    // modelo también es obligatorio (la tabla lo acepta NULL, pero sin él el
+    // INSERT recibía undefined y respondía 500)
+    if (!nombre || !telefono || !modelo) {
+      const faltan = [!nombre && 'nombre', !telefono && 'teléfono', !modelo && 'modelo'].filter(Boolean);
       return res.status(400).json({
-        error: 'Campos requeridos faltantes',
+        error: `Faltan datos obligatorios: ${faltan.join(', ')}`,
         details: {
           nombre: !nombre ? 'requerido' : 'ok',
-          telefono: !telefono ? 'requerido' : 'ok'
+          telefono: !telefono ? 'requerido' : 'ok',
+          modelo: !modelo ? 'requerido' : 'ok'
         }
       });
     }
