@@ -24,7 +24,7 @@ const { initSocketServer } = require('./socket-server');
 // Proxy multi-tenant con la misma interfaz que el pool de MySQL de antes
 const pool = require('./db');
 
-const { tenantPathRewrite, resolveTenant, publicTenantRouter } = require('./tenancy/middleware');
+const { tenantPathRewrite, resolveTenant, publicTenantRouter, requireModulo } = require('./tenancy/middleware');
 const { emitTenant, everyTenant, perTenant, nowInTz, startSuspensionWatcher } = require('./tenancy');
 const { authenticateToken } = require('./middleware/auth');
 
@@ -139,11 +139,12 @@ app.use('/api/leads', (req, res, next) => {
 });
 
 app.use('/api/leads', leadsRouter);
-app.use('/api/presupuestos', require('./routes/presupuestos'));
+// Rutas de módulos activables: 403 si el módulo está apagado para el tenant
+app.use('/api/presupuestos', requireModulo('presupuestos'), require('./routes/presupuestos'));
 app.use('/api/webhooks', require('./routes/webhooks')); // whatsapp-bot y zapier-formularios (emiten sockets internamente)
 app.use('/api/activity', activityRouter);
 // calls, metas y users no tenían auth: ahora piden token (el front ya lo manda)
-app.use('/api/metas', authenticateToken, metasRouter(pool));
+app.use('/api/metas', requireModulo('metas'), authenticateToken, metasRouter(pool));
 app.use('/api/distribution', require('./routes/distribution'));
 app.use('/api/calls', authenticateToken, require('./routes/calls'));
 app.use('/api/notas', require('./routes/notas'));
@@ -153,10 +154,10 @@ app.use('/api/alertas', require('./routes/alertas'));
 if (usersRouter) app.use('/api/users', authenticateToken, usersRouter);
 
 // Tareas que supervisores/gerentes asignan a vendedores
-app.use('/api/tareas', require('./routes/tareas'));
+app.use('/api/tareas', requireModulo('asignar_tareas'), require('./routes/tareas'));
 
 // Chat de WhatsApp de cada lead (lee la base y manda por el bot)
-app.use('/api/whatsapp', require('./routes/whatsapp'));
+app.use('/api/whatsapp', requireModulo('chat_whatsapp'), require('./routes/whatsapp'));
 
 // Agente IA: bandeja/aprobaciones en /api/agent y servidor MCP en /api/mcp
 // (externos: /api/t/<slug>/mcp)

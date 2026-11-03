@@ -28,7 +28,7 @@ const HOST_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([
 /** Claves de config que se aceptan (las de SECRET_KEYS se guardan cifradas). */
 const CONFIG_KEYS = [
   'timezone', 'pais', 'prefijo_telefonico', 'moneda', 'wa_bot_url',
-  'sheet_fuentes', 'dist_excluidos', 'agent_provider', 'agent_model',
+  'sheet_fuentes', 'dist_excluidos', 'agent_provider', 'agent_model', 'marcas', 'marca_default',
   ...SECRET_KEYS,
 ];
 const BRANDING_KEYS = ['nombre', 'logo_url', 'favicon_url', 'color_primario'];
@@ -198,6 +198,15 @@ function validarValorConfig(k, v) {
     case 'dist_excluidos':
       if (!Array.isArray(v) && typeof v !== 'string') fail('dist_excluidos tiene que ser una lista de ids');
       break;
+    case 'marcas':
+      if (!Array.isArray(v) || !v.length) fail('marcas tiene que ser una lista con al menos una marca');
+      for (const m of v) {
+        if (typeof m !== 'string' || !/^[a-z0-9][a-z0-9 -]{0,29}$/.test(m)) fail(`Marca inválida: ${m} (minúsculas, máx. 30)`);
+      }
+      break;
+    case 'marca_default':
+      if (typeof v !== 'string' || !/^[a-z0-9][a-z0-9 -]{0,29}$/.test(v)) fail('marca_default inválida (minúsculas, máx. 30)');
+      break;
     case 'agent_provider':
       if (!['openai', 'anthropic'].includes(v)) fail('agent_provider: openai o anthropic');
       break;
@@ -224,6 +233,9 @@ function mergeConfig(guardada = {}, cambios = {}) {
     if (v === null || v === '') { delete out[k]; continue; }
     validarValorConfig(k, v);
     out[k] = SECRET_KEYS.includes(k) ? (k === 'lead_api_keys' ? encryptJSON(v) : encrypt(v)) : v;
+  }
+  if (out.marca_default && Array.isArray(out.marcas) && !out.marcas.includes(out.marca_default)) {
+    fail(`marca_default (${out.marca_default}) tiene que estar en marcas`);
   }
   return out;
 }

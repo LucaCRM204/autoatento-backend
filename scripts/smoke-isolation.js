@@ -127,6 +127,8 @@ async function main() {
       ['/agent/status', false], ['/agent/actions', false], ['/agent/runs', false], ['/agent/config', false], ['/agent/events', false],
       ['/webhooks/health', false], ['/auth/me', false],
     ];
+    const MODULO_DE_RUTA = [['/metas', 'metas'], ['/agent', 'agente_ia'], ['/presupuestos', 'presupuestos'], ['/tareas', 'asignar_tareas'], ['/whatsapp', 'chat_whatsapp']];
+    const apagadas = new Set();
     for (const t of [A, B]) {
       const fallas = [];
       let n = 0;
@@ -135,6 +137,13 @@ async function main() {
         const txt = JSON.stringify(r.data);
         n++;
         if (txt.includes(t.otra)) { fallas.push(`${ruta} -> contiene datos de ${t.otra}`); continue; }
+        // Módulo apagado en este tenant -> tiene que dar 403
+        const modulo = MODULO_DE_RUTA.find(([pre]) => ruta.startsWith(pre))?.[1];
+        if (modulo && !t.tenant.modulos[modulo]) {
+          if (r.status !== 403) fallas.push(`${ruta} -> ${r.status} (módulo ${modulo} apagado: esperaba 403)`);
+          else apagadas.add(`${t.slug}:${modulo}`);
+          continue;
+        }
         const conocido = CONOCIDOS[ruta];
         if (conocido && r.status === conocido.status) {
           if (t === A) avisos.push(`GET /api${ruta} -> ${r.status}: ${conocido.motivo}`);
@@ -144,8 +153,10 @@ async function main() {
         else if (txt.includes(t.otra)) fallas.push(`${ruta} -> contiene datos de ${t.otra}`);
         else if (conDatos && !txt.includes(t.marca)) fallas.push(`${ruta} -> no trae datos de ${t.marca}`);
       }
-      check(`${t.slug}: ${n} rutas GET responden 200 solo con sus datos`, !fallas.length, fallas.join('\n     '));
+      check(`${t.slug}: ${n} rutas GET responden 200 solo con sus datos (403 si el módulo está apagado)`, !fallas.length, fallas.join('\n     '));
     }
+    check('tenant-b: metas y agente_ia apagados -> sus rutas dan 403', apagadas.has('tenant-b:metas') && apagadas.has('tenant-b:agente_ia'), [...apagadas].join(','));
+    check('el mismo módulo prendido en A responde', (await http.get('/metas', as(A, A.token))).status === 200);
 
     // calls / metas / users ahora piden token
     for (const ruta of ['/calls/1', '/metas', '/users']) {
@@ -169,6 +180,22 @@ async function main() {
     check('webhook sheets en B (fuente Emanuel)', sh.status === 200 && sh.data.fuente === 'Emanuel', JSON.stringify(sh.data));
     const leadsB = JSON.stringify((await http.get('/leads', as(B, B.token))).data);
     check('lead del webhook de A no está en B', !leadsB.includes('Webhook Alfa') && leadsB.includes('Sheet Bravo'));
+
+    // ---------- Marcas del tenant (config.marcas / marca_default) ----------
+    const marcaDe = async (t, id) => (await http.get(`/leads/${id}`, as(t, t.token))).data?.lead?.marca;
+    check('webhook en A sin marca -> marca_default de A (fiat)', (await marcaDe(A, wh.data.leadId)) === 'fiat');
+    check('webhook sheets en B sin marca -> marca_default de B (peugeot)', (await marcaDe(B, sh.data.leadId)) === 'peugeot');
+    const telNuevo = () => `115${String(Date.now()).slice(-7)}`;
+    const whC = await http.post('/t/tenant-b/webhooks/whatsapp-bot', { nombre: 'Marca Bravo C', telefono: telNuevo(), marca: 'Citroen' }, { headers: { 'x-api-key': B.keys['whatsapp-bot'] } });
+    check('webhook en B con marca habilitada (citroen) -> la usa', (await marcaDe(B, whC.data.leadId)) === 'citroen', JSON.stringify(whC.data).slice(0, 200));
+    const whF = await http.post('/t/tenant-b/webhooks/whatsapp-bot', { nombre: 'Marca Bravo F', telefono: telNuevo(), marca: 'fiat' }, { headers: { 'x-api-key': B.keys['whatsapp-bot'] } });
+    check('webhook en B con marca no habilitada (fiat) -> marca_default', (await marcaDe(B, whF.data.leadId)) === 'peugeot');
+    check('alta manual en B con marca no habilitada -> 400',
+      (await http.post('/leads', { nombre: 'Manual Bravo', telefono: telNuevo(), modelo: '208', marca: 'fiat' }, as(B, B.token))).status === 400);
+    const manual = await http.post('/leads', { nombre: 'Manual Bravo Ok', telefono: telNuevo(), modelo: '208' }, as(B, B.token));
+    check('alta manual en B sin marca -> marca_default', manual.status === 200 && manual.data.lead?.marca === 'peugeot', JSON.stringify(manual.data).slice(0, 200));
+    check('/public/tenant expone marcas y marca_default',
+      JSON.stringify((await http.get('/public/tenant', { params: { slug: 'tenant-b' } })).data.config) === JSON.stringify({ timezone: 'America/Montevideo', pais: 'Argentina', prefijo_telefonico: '54', moneda: 'ARS', wa_bot_url: 'http://127.0.0.1:9/wa-tenant-b', marcas: ['peugeot', 'citroen'], marca_default: 'peugeot' }));
 
     // ---------- Sockets ----------
     const conectar = (t, token, slug = t.slug) => new Promise((resolve) => {

@@ -6,7 +6,7 @@
  * - Estados protegidos (rechazado_supervisor)
  * - Asignación directa por round-robin / distribución ponderada
  * - Sistema de aceptación en tiempo real (10 min, ver socket-server.js)
- * - Marca fija: fiat | Fuente por defecto: community
+ * - Marca: de tenants.config.marcas (default marca_default) | Fuente por defecto: community
  */
 
 const router = require('express').Router();
@@ -30,6 +30,7 @@ const FIELD_LABELS = {
 };
 const { getAssignedVendorByBrand, getRoundRobinStatus, resetRoundRobinIndex } = require('../utils/assign');
 const { emitTenant } = require('../tenancy/realtime');
+const { marcaPermitida, marcaDefault, normMarca } = require('../tenancy/settings');
 
 // Importar funciones del socket server
 let socketFunctions = null;
@@ -295,7 +296,6 @@ router.post('/', authenticateToken, async (req, res) => {
       nombre,
       telefono,
       modelo,
-      marca = 'fiat',
       formaPago = 'Contado',
       infoUsado = '',
       entrega = false,
@@ -317,7 +317,9 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
-    if (marca !== 'fiat') {
+    // Sin marca -> la default del tenant; con marca, tiene que estar habilitada
+    const marca = req.body.marca ? normMarca(req.body.marca) : marcaDefault();
+    if (req.body.marca && !marcaPermitida(req.body.marca)) {
       return res.status(400).json({ error: 'Marca inválida' });
     }
 
@@ -784,7 +786,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
       const col = key === 'vendedor' ? 'assigned_to' : key;
       if (key !== 'notas' && String(leadActual[col] ?? '') === String(value ?? '')) continue;
 
-      if (key === 'marca' && value !== 'fiat') {
+      if (key === 'marca' && !marcaPermitida(value)) {
         return res.status(400).json({ error: 'Marca inválida' });
       }
 

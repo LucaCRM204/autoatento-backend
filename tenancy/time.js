@@ -52,4 +52,29 @@ function nowInTz(tz = tenantTimezone(), date = new Date()) {
   };
 }
 
-module.exports = { nowInTz, tenantTimezone, DEFAULT_TIMEZONE };
+/** Diferencia (ms) entre la hora local de tz y UTC en ese instante. */
+function offsetMs(tz, date) {
+  const p = {};
+  for (const part of formatter(tz).formatToParts(date)) p[part.type] = part.value;
+  const comoUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+  return comoUtc - Math.floor(date.getTime() / 1000) * 1000;
+}
+
+/** Instante (Date) de la medianoche local del día y/m/d en tz. */
+function medianocheUtc(y, m, d, tz) {
+  const guess = Date.UTC(y, m - 1, d);
+  const off1 = offsetMs(tz, new Date(guess));
+  let utc = guess - off1;
+  const off2 = offsetMs(tz, new Date(utc));
+  if (off2 !== off1) utc = guess - off2; // cambio de horario justo en el borde
+  return new Date(utc);
+}
+
+/** [desde, hasta) del mes 'YYYY-MM' en la zona horaria tz, como instantes UTC. */
+function rangoMesUtc(mes, tz = tenantTimezone()) {
+  const [y, m] = mes.split('-').map(Number);
+  const [y2, m2] = m === 12 ? [y + 1, 1] : [y, m + 1];
+  return { desde: medianocheUtc(y, m, 1, tz), hasta: medianocheUtc(y2, m2, 1, tz) };
+}
+
+module.exports = { nowInTz, tenantTimezone, rangoMesUtc, medianocheUtc, DEFAULT_TIMEZONE };

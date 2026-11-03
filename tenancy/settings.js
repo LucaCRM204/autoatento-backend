@@ -40,9 +40,41 @@ function waBot() {
   };
 }
 
+// ---------- Marcas del tenant ----------
+// tenants.config.marcas = ['fiat', 'jeep'] (habilitadas) y marca_default = 'fiat'.
+// Nada hardcodeado: sin config, la marca queda en null salvo que venga una.
+const normMarca = (m) => String(m ?? '').trim().toLowerCase().slice(0, 30);
+
+function marcasTenant() {
+  const l = tenantConfig('marcas');
+  return Array.isArray(l) ? l.map(normMarca).filter(Boolean) : [];
+}
+
+function marcaDefault() {
+  return normMarca(tenantConfig('marca_default')) || marcasTenant()[0] || null;
+}
+
+/** ¿Se puede usar esta marca? Con lista configurada, tiene que estar en la lista. */
+function marcaPermitida(m) {
+  const n = normMarca(m);
+  if (!n) return false;
+  const lista = marcasTenant();
+  return lista.length ? lista.includes(n) : true;
+}
+
+/** Para webhooks/bot: la del payload si está habilitada; si no, la default. */
+function resolverMarca(m) {
+  const n = normMarca(m);
+  if (n && marcasTenant().includes(n)) return n;
+  return marcaDefault();
+}
+
 /** Nombre visible del tenant (branding), con fallback a AutoAtento. */
 function tenantNombre(tenant = currentTenant()) {
   return tenant?.branding?.nombre || tenant?.nombre || 'AutoAtento';
 }
 
-module.exports = { tenantConfig, tenantSecret, tenantNombre, waBot };
+module.exports = {
+  tenantConfig, tenantSecret, tenantNombre, waBot,
+  normMarca, marcasTenant, marcaDefault, marcaPermitida, resolverMarca,
+};

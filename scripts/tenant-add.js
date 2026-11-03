@@ -15,6 +15,8 @@
  *   --branding-nombre / --logo-url / --color
  *   --timezone <IANA>         default America/Argentina/Buenos_Aires
  *   --wa-bot-url <url>
+ *   --marca <marca>           repetible (marcas habilitadas); la primera es la default
+ *   --marca-default <marca>
  *   --modulo nombre=0|1       repetible
  *
  * Los secretos (wa_bot_key, lead_api_keys, agent_mcp_key, openai_api_key) se
@@ -34,6 +36,7 @@ const { values: a } = parseArgs({
     'owner-email': { type: 'string' }, 'owner-name': { type: 'string' },
     'branding-nombre': { type: 'string' }, 'logo-url': { type: 'string' }, color: { type: 'string' },
     timezone: { type: 'string' }, 'wa-bot-url': { type: 'string' },
+    marca: { type: 'string', multiple: true }, 'marca-default': { type: 'string' },
     modulo: { type: 'string', multiple: true },
   },
 });
@@ -54,6 +57,10 @@ async function main() {
   if (a.color) branding.color_primario = a.color;
   const config = { timezone: a.timezone || 'America/Argentina/Buenos_Aires', pais: 'Argentina', prefijo_telefonico: '54', moneda: 'ARS' };
   if (a['wa-bot-url']) config.wa_bot_url = a['wa-bot-url'];
+  if (a.marca?.length) {
+    config.marcas = a.marca.map((m) => m.toLowerCase());
+    config.marca_default = (a['marca-default'] || a.marca[0]).toLowerCase();
+  }
 
   const r = await provision.crearTenant({
     slug: a.slug, nombre: a.nombre, plan: a.plan, dominios: a.dominio || [], modulos, branding, config,

@@ -100,6 +100,17 @@ function resolveTenant(req, res, next) {
   });
 }
 
+/**
+ * 403 si el módulo está apagado para el tenant del request.
+ * Va después de resolveTenant (necesita req.tenant).
+ */
+function requireModulo(modulo) {
+  return (req, res, next) => {
+    if (req.tenant?.modulos?.[modulo]) return next();
+    res.status(403).json({ ok: false, error: 'Módulo no habilitado para esta cuenta', modulo });
+  };
+}
+
 function rebindTenant(req, _res, next) {
   if (!req.tenant) return next();
   runWithTenant(req.tenant, next);
@@ -122,6 +133,6 @@ publicTenantRouter.get('/tenant', async (req, res) => {
 });
 
 module.exports = {
-  tenantPathRewrite, resolveTenant, rebindTenant, publicTenantRouter,
+  tenantPathRewrite, resolveTenant, rebindTenant, publicTenantRouter, requireModulo,
   checkTokenTenant, findTenant, rechazarPorEstado, cookieName, SLUG_RE,
 };

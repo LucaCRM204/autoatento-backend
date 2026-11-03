@@ -15,7 +15,7 @@ const env = require('./env');
 /** Claves de tenants.config que se guardan cifradas. */
 const SECRET_KEYS = ['wa_bot_key', 'openai_api_key', 'anthropic_api_key', 'agent_mcp_key', 'lead_api_keys'];
 /** Claves de config que se pueden mostrar al frontend (endpoint público). */
-const PUBLIC_CONFIG_KEYS = ['timezone', 'pais', 'prefijo_telefonico', 'moneda', 'wa_bot_url'];
+const PUBLIC_CONFIG_KEYS = ['timezone', 'pais', 'prefijo_telefonico', 'moneda', 'wa_bot_url', 'marcas', 'marca_default'];
 
 const DEFAULT_TIMEZONE = 'America/Argentina/Buenos_Aires';
 

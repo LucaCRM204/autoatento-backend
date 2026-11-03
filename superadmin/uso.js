@@ -8,25 +8,31 @@
  *                      ("entrar como owner").
  *   leads_ingresados = leads con created_at dentro del mes.
  *
- * El mes se corta con el reloj de la base del tenant (en Railway, UTC): un
- * lead cargado el último día después de las 21 h de Argentina cae en el mes
- * siguiente. Se guarda en autoatento_control.uso_mensual.
+ * El mes se corta en la zona horaria del tenant (tenants.config.timezone):
+ * el inicio y fin del mes local se pasan al reloj de la base (sea UTC o no)
+ * antes de comparar. Se guarda en autoatento_control.uso_mensual.
  */
 const axios = require('axios');
 const db = require('../db');
 const { getControlPool } = require('../tenancy/control');
 const { everyTenant } = require('../tenancy/jobs');
-const { nowInTz } = require('../tenancy/time');
+const { nowInTz, rangoMesUtc } = require('../tenancy/time');
 const { waBot } = require('../tenancy/settings');
 const { AGENT_EMAIL } = require('../agent/schema');
 
 const MES_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
-function rangoMes(mes) {
+/**
+ * Bordes del mes 'YYYY-MM' (hora local del tenant) expresados en el reloj de
+ * la base del tenant, como 'YYYY-MM-DD HH:MM:SS' para comparar con DATETIME/
+ * TIMESTAMP escritos con NOW().
+ */
+async function rangoMes(mes) {
   if (!MES_RE.test(mes)) throw new Error(`Mes inválido: ${mes} (YYYY-MM)`);
-  const [y, m] = mes.split('-').map(Number);
-  const sig = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
-  return { desde: `${mes}-01`, hasta: `${sig}-01` };
+  const { desde, hasta } = rangoMesUtc(mes);
+  const [[{ off }]] = await db.query('SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS off');
+  const enBase = (d) => new Date(d.getTime() + Number(off) * 1000).toISOString().slice(0, 19).replace('T', ' ');
+  return { desde: enBase(desde), hasta: enBase(hasta) };
 }
 
 function mesAnterior(mes) {
@@ -42,8 +48,8 @@ async function tablaExiste(nombre) {
 
 /** Calcula el uso del tenant del contexto. */
 async function calcularUso(mes) {
-  const { desde, hasta } = rangoMes(mes);
-  const partes = ['SELECT user_id FROM user_sessions WHERE date >= ? AND date < ?'];
+  const { desde, hasta } = await rangoMes(mes);
+  const partes = ['SELECT user_id FROM user_sessions WHERE session_start >= ? AND session_start < ?'];
   const params = [desde, hasta];
   if (await tablaExiste('user_logins')) {
     partes.push('SELECT user_id FROM user_logins WHERE created_at >= ? AND created_at < ?');

@@ -25,8 +25,9 @@ const { ensureControlSchema, createControlDatabase, getControlPool, closeControl
 const { nowInTz } = require('../tenancy/time');
 
 const TENANTS = [
-  { slug: 'tenant-a', marca: 'Alfa', tz: 'America/Argentina/Buenos_Aires', color: '#2563eb', modulos: {} },
-  { slug: 'tenant-b', marca: 'Bravo', tz: 'America/Montevideo', color: '#16a34a', modulos: { agente_ia: false } },
+  { slug: 'tenant-a', marca: 'Alfa', marcas: ['fiat'], tz: 'America/Argentina/Buenos_Aires', color: '#2563eb', modulos: {} },
+  // B: dos marcas y dos módulos apagados (agente IA y metas) para probar el menú y el 403
+  { slug: 'tenant-b', marca: 'Bravo', marcas: ['peugeot', 'citroen'], tz: 'America/Montevideo', color: '#16a34a', modulos: { agente_ia: false, metas: false } },
 ];
 const PERMITIDOS = new Set(TENANTS.map((t) => t.slug));
 
@@ -64,8 +65,8 @@ async function cargarDatos(dbUrl, t, password) {
     for (const [i, [vend, estado, tel]] of [[v1, 'nuevo', '1155550001'], [v2, 'contactado', '1155550002'], [v1, 'interesado', '1155550003']].entries()) {
       leads.push(await ins(
         `INSERT INTO leads (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_by, created_at, assigned_at)
-         VALUES (?, ?, ?, 'fiat', 'Contado', ?, 'community', ?, ?, ?, NOW(), NOW())`,
-        [`Cliente ${M} ${i + 1}`, `${t.slug === 'tenant-a' ? '' : '9'}${tel}`, `Modelo ${M}`, estado, `Nota del lead ${M}`, vend, owner.id]));
+         VALUES (?, ?, ?, ?, 'Contado', ?, 'community', ?, ?, ?, NOW(), NOW())`,
+        [`Cliente ${M} ${i + 1}`, `${t.slug === 'tenant-a' ? '' : '9'}${tel}`, `Modelo ${M}`, t.marcas[0], estado, `Nota del lead ${M}`, vend, owner.id]));
     }
     // Lead con oferta de aceptación vencida: el checker (loop) lo tiene que pasar a vend2
     const ofertado = await ins(
@@ -86,7 +87,7 @@ async function cargarDatos(dbUrl, t, password) {
       "INSERT INTO tareas_asignadas (lead_id, asignado_a, created_by, tipo, prioridad, fecha_limite, descripcion) VALUES (?, ?, ?, 'seguimiento', 'alta', ?, ?)",
       [l1, v1, sup, futuro.dt, `Tarea ${M}`]);
     await c.execute("INSERT INTO cotizaciones (lead_id, vehiculo, precio_contado, anticipo, created_by) VALUES (?, ?, 1000000, 200000, ?)", [l1, `Vehiculo ${M}`, v1]);
-    await c.execute("INSERT INTO presupuestos (modelo, marca, precio_contado, created_by) VALUES (?, 'fiat', 1500000, ?)", [`Presupuesto ${M}`, owner.id]);
+    await c.execute("INSERT INTO presupuestos (modelo, marca, precio_contado, created_by) VALUES (?, ?, 1500000, ?)", [`Presupuesto ${M}`, t.marcas[0], owner.id]);
     await c.execute("INSERT INTO metas (vendedor_id, mes, meta_ventas, meta_leads, created_by) VALUES (?, ?, 5, 20, ?)", [v1, nowInTz(t.tz).monthKey, gerente]);
     await c.execute("INSERT INTO call_logs (lead_id, user_id, telefono, duracion_segundos, resultado, notas) VALUES (?, ?, '1155550001', 60, 'contactado', ?)", [l1, v1, `Llamada ${M}`]);
     const phone = `54911555500${t.slug === 'tenant-a' ? '01' : '91'}`;
@@ -113,6 +114,7 @@ async function seedTenant(t, password) {
     branding: { nombre: `Concesionaria ${t.marca}`, color_primario: t.color },
     config: {
       timezone: t.tz, pais: 'Argentina', prefijo_telefonico: '54', moneda: 'ARS',
+      marcas: t.marcas, marca_default: t.marcas[0],
       wa_bot_url: `http://127.0.0.1:9/wa-${t.slug}`,
       wa_bot_key: crypto.randomBytes(16).toString('hex'),
       lead_api_keys: {

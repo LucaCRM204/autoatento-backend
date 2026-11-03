@@ -1,6 +1,9 @@
 /**
  * ============================================
- * WEBHOOKS DE ENTRADA DE LEADS — Auto del Sol Fiat
+ * WEBHOOKS DE ENTRADA DE LEADS
+ *
+ * Marca del lead: si el payload trae "marca" y está en tenants.config.marcas,
+ * se usa; si no, tenants.config.marca_default.
  * ============================================
  * Endpoints:
  *   POST /api/webhooks/whatsapp-bot   -> leads que entran por el bot de WhatsApp
@@ -37,8 +40,9 @@ const pool = require('../db');
 const intakeAuth = require('../middleware/intakeAuth');
 const dist = require('../services/distribucion.service');
 const { emitTenant } = require('../tenancy/realtime');
+const { requireModulo } = require('../tenancy/middleware');
 const { perTenant } = require('../tenancy/state');
-const { tenantConfig } = require('../tenancy/settings');
+const { tenantConfig, resolverMarca } = require('../tenancy/settings');
 const router = express.Router();
 
 // Round-robin parejo de emergencia, para cuando no hay ningún equipo
@@ -124,9 +128,9 @@ async function asignarLeadBot(ownerId) {
 // POST /api/webhooks/whatsapp-bot
 // Leads que entran por el bot de WhatsApp
 // ========================================
-router.post('/whatsapp-bot', intakeAuth, async (req, res) => {
+router.post('/whatsapp-bot', requireModulo('whatsapp_bot'), intakeAuth, async (req, res) => {
   try {
-    const { nombre, telefono, modelo, notas, formaPago, ownerId } = req.body;
+    const { nombre, telefono, modelo, notas, formaPago, ownerId, marca } = req.body;
 
     console.log('[whatsapp-bot] Recibido:', JSON.stringify(req.body));
 
@@ -147,11 +151,12 @@ router.post('/whatsapp-bot', intakeAuth, async (req, res) => {
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at, assigned_at)
        VALUES
-        (?, ?, ?, 'fiat', ?, 'nuevo', 'community', ?, ?, NOW(), NOW())`,
+        (?, ?, ?, ?, ?, 'nuevo', 'community', ?, ?, NOW(), NOW())`,
       [
         nombre,
         telefono,
         modelo || 'Consultar',
+        resolverMarca(marca),
         formaPago || 'Consultar',
         notas || '',
         assigned_to
@@ -187,7 +192,7 @@ router.post('/whatsapp-bot', intakeAuth, async (req, res) => {
 // ========================================
 router.post('/zapier-formularios', intakeAuth, async (req, res) => {
   try {
-    const { nombre, telefono, modelo, notas, formaPago, email } = req.body;
+    const { nombre, telefono, modelo, notas, formaPago, email, marca } = req.body;
 
     console.log('[zapier-formularios] Recibido:', JSON.stringify(req.body));
 
@@ -209,11 +214,12 @@ router.post('/zapier-formularios', intakeAuth, async (req, res) => {
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at, assigned_at)
        VALUES
-        (?, ?, ?, 'fiat', ?, 'nuevo', 'community', ?, ?, NOW(), NOW())`,
+        (?, ?, ?, ?, ?, 'nuevo', 'community', ?, ?, NOW(), NOW())`,
       [
         nombre,
         telefono,
         modelo || 'Consultar',
+        resolverMarca(marca),
         formaPago || 'Consultar',
         notasFinal,
         assigned_to
@@ -266,7 +272,7 @@ router.post('/sheets', intakeAuth, async (req, res) => {
       return res.status(403).json({ error: `La key de "${req.provider}" no es de un sheet` });
     }
 
-    const { nombre, modelo, notas, formaPago, email } = req.body;
+    const { nombre, modelo, notas, formaPago, email, marca } = req.body;
     const telefono = limpiarTelefono(req.body.telefono);
 
     console.log(`[sheets:${fuente}] Recibido:`, JSON.stringify(req.body));
@@ -300,11 +306,12 @@ router.post('/sheets', intakeAuth, async (req, res) => {
       `INSERT INTO leads
         (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_at, assigned_at)
        VALUES
-        (?, ?, ?, 'fiat', ?, 'nuevo', ?, ?, ?, NOW(), NOW())`,
+        (?, ?, ?, ?, ?, 'nuevo', ?, ?, ?, NOW(), NOW())`,
       [
         String(nombre).trim(),
         telefono,
         modelo || 'Consultar',
+        resolverMarca(marca),
         formaPago || 'Consultar',
         fuente,
         notasFinal,

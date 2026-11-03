@@ -30,7 +30,7 @@ const worker = require('./worker');
 const llm = require('./llm');
 const { ensureReady } = require('./state');
 const { everyTenant } = require('../tenancy/jobs');
-const { resolveTenant } = require('../tenancy/middleware');
+const { resolveTenant, requireModulo } = require('../tenancy/middleware');
 
 let listo = false;
 const guard = (_req, res, next) => {
@@ -45,10 +45,11 @@ const guard = (_req, res, next) => {
 
 function mount(app) {
   // Ambas quedan detrás de resolveTenant (todo /api lo tiene en server.js)
-  app.use('/api/agent', guard, require('./routes'));
-  app.use('/api/mcp', guard, require('./mcp'));
+  const modulo = requireModulo('agente_ia');
+  app.use('/api/agent', modulo, guard, require('./routes'));
+  app.use('/api/mcp', modulo, guard, require('./mcp'));
   // Compatibilidad: /mcp con header X-Tenant
-  app.use('/mcp', resolveTenant, guard, require('./mcp'));
+  app.use('/mcp', resolveTenant, modulo, guard, require('./mcp'));
 }
 
 let loops = [];

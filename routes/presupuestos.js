@@ -2,6 +2,7 @@ const router = require('express').Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 const { rebindTenant } = require('../tenancy/middleware');
+const { resolverMarca } = require('../tenancy/settings');
 const fs = require('fs');
 const multer = require('multer');
 const path = require('path');
@@ -115,9 +116,10 @@ router.post('/', authenticateToken, async (req, res) => {
       `INSERT INTO presupuestos
        (modelo, marca, imagen_url, precio_contado, especificaciones_tecnicas,
         planes_cuotas, bonificaciones, anticipo, activo, created_by, created_at)
-       VALUES (?, 'fiat', ?, ?, ?, ?, ?, ?, 1, ?, NOW())`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW())`,
       [
         modelo,
+        resolverMarca(req.body.marca),
         imagen_url || null,
         precio_contado || null,
         especificaciones_tecnicas || null,
