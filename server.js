@@ -25,7 +25,7 @@ const { initSocketServer } = require('./socket-server');
 const pool = require('./db');
 
 const { tenantPathRewrite, resolveTenant, publicTenantRouter } = require('./tenancy/middleware');
-const { emitTenant, everyTenant, perTenant, nowInTz } = require('./tenancy');
+const { emitTenant, everyTenant, perTenant, nowInTz, startSuspensionWatcher } = require('./tenancy');
 const { authenticateToken } = require('./middleware/auth');
 
 // Importar rutas
@@ -74,6 +74,9 @@ app.options('*', cors(corsOpts));
 // Rutas sin tenant
 app.get('/api/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 app.use('/api/public', publicTenantRouter);
+
+// Panel superadmin de AutoAtento (login propio, sin tenant)
+app.use('/api/superadmin', require('./superadmin/routes'));
 
 // De acá en adelante todo /api corre dentro del contexto de un tenant
 app.use('/api', resolveTenant);
@@ -204,6 +207,13 @@ everyTenant('reset-mensual', 60 * MIN, async (t) => {
     throw e;
   }
 });
+
+// Uso mensual por tenant (usuarios activos y leads) para facturar: cada hora
+require('./superadmin/uso').startUsoJob();
+
+// Corta los sockets de tenants suspendidos o de baja (el panel además los
+// corta en el momento; esto cubre cambios hechos en otra instancia o en la base)
+startSuspensionWatcher(Number(process.env.SUSPENSION_WATCH_MS) || 30 * 1000);
 
 const PORT = process.env.PORT || 3001;
 

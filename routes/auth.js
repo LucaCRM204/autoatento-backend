@@ -41,6 +41,11 @@ router.post('/login', async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
 
+    // Registro de login para el uso mensual (usuarios activos). Si la tabla
+    // todavía no existe (tenant sin migrar) no frena el login.
+    pool.execute('INSERT INTO user_logins (user_id, ip) VALUES (?, ?)', [user.id, String(req.ip || '').slice(0, 64)])
+      .catch((e) => console.warn(`[auth] user_logins [${req.tenant.slug}]:`, e.code || e.message));
+
     // Un solo backend para todos los dominios: la cookie lleva el slug para no pisar la de otro tenant
     res.cookie(cookieName(req.tenant.slug), token, {
       httpOnly: true,

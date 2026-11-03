@@ -102,6 +102,9 @@ function initSocketServer(httpServer, pool) {
       }
 
       socket.data.tenant = tenant;
+      // Sesión de soporte ("entrar como owner" desde el panel superadmin):
+      // no se registra en user_sessions para no contar como uso del cliente.
+      socket.data.impersonado = !!decoded.imp;
       socket.userId = decoded.id || decoded.userId;
       socket.userName = decoded.name;
       socket.userRole = decoded.role;
@@ -540,7 +543,7 @@ async function handleUserConnect(socket, io, pool) {
   }
   userSessions.get(key).add(socket.id);
 
-  await logSessionStart(pool, userId);
+  if (!socket.data.impersonado) await logSessionStart(pool, userId);
 
   logActivity(userId, 'connected', { socketId: socket.id });
 
@@ -597,7 +600,7 @@ async function handleUserDisconnect(socket, io, pool) {
     if (userSessions.get(key).size === 0) {
       userSessions.delete(key);
 
-      if (userData) {
+      if (userData && !socket.data.impersonado) {
         await logSessionEnd(pool, userId, userData.connectedAt);
       }
 
