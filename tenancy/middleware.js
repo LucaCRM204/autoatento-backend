@@ -124,7 +124,8 @@ publicTenantRouter.get('/tenant', async (req, res) => {
     if (!host && !slug) return res.status(400).json({ ok: false, error: 'Falta host' });
     const tenant = slug ? await findTenant(slug) : await registry.getByHost(host);
     if (!tenant || tenant.estado === 'baja') return res.status(404).json({ ok: false, error: 'Tenant inexistente' });
-    res.set('Cache-Control', 'public, max-age=60');
+    // no-cache: el navegador revalida (ETag -> 304) y ve enseguida cambios de módulos, branding o estado
+    res.set('Cache-Control', 'no-cache');
     res.json({ ok: true, ...registry.publicView(tenant) });
   } catch (e) {
     console.error('[public/tenant]', e.message);
