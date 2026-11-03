@@ -101,44 +101,51 @@ async function cargarDatos(dbUrl, t, password) {
   }
 }
 
-async function main() {
+/** Borra y recrea un tenant de desarrollo con el mismo circuito que el panel (schema + migraciones + owner). */
+async function seedTenant(t, password) {
+  await borrarTenant(t.slug);
+  const r = await provision.crearTenant({
+    slug: t.slug,
+    nombre: `Concesionaria ${t.marca}`,
+    plan: 'pro',
+    dominios: [`${t.slug}.localhost`],
+    modulos: t.modulos,
+    branding: { nombre: `Concesionaria ${t.marca}`, color_primario: t.color },
+    config: {
+      timezone: t.tz, pais: 'Argentina', prefijo_telefonico: '54', moneda: 'ARS',
+      wa_bot_url: `http://127.0.0.1:9/wa-${t.slug}`,
+      wa_bot_key: crypto.randomBytes(16).toString('hex'),
+      lead_api_keys: {
+        'whatsapp-bot': crypto.randomBytes(16).toString('hex'),
+        'sheet-emanuel': crypto.randomBytes(16).toString('hex'),
+      },
+      agent_mcp_key: crypto.randomBytes(16).toString('hex'),
+    },
+    owner: { email: 'owner@demo.test', password, name: `Owner ${t.marca}` },
+  });
+  const dbUrl = env.withDatabase(env.tenantServerUrl(), provision.schemaName(t.slug));
+  const ids = await cargarDatos(dbUrl, t, password);
+  console.log(`✅ ${t.slug} (#${r.id}): ${r.migraciones.aplicadas.length} migraciones, ${ids.leads.length + 1} leads, 5 usuarios`);
+  return r;
+}
+
+async function seed({ slugs = null } = {}) {
   if (process.env.NODE_ENV === 'production') throw new Error('dev-seed no corre con NODE_ENV=production');
   const password = process.env.DEV_TENANT_PASSWORD;
   if (!password) throw new Error('Falta DEV_TENANT_PASSWORD en el .env');
 
   await createControlDatabase();
   await ensureControlSchema();
-
   for (const t of TENANTS) {
-    await borrarTenant(t.slug);
-    const dbUrl = await provision.createTenantSchema(t.slug);
-    const tablas = await provision.loadBaseSchema(dbUrl);
-    await provision.ensureOwner(dbUrl, { email: 'owner@demo.test', password, name: `Owner ${t.marca}` });
-    const ids = await cargarDatos(dbUrl, t, password);
-    const id = await provision.registerTenant({
-      slug: t.slug,
-      nombre: `Concesionaria ${t.marca}`,
-      plan: 'pro',
-      dbUrl,
-      dominios: [`${t.slug}.localhost`],
-      modulos: t.modulos,
-      branding: { nombre: `Concesionaria ${t.marca}`, color_primario: t.color },
-      config: {
-        timezone: t.tz, pais: 'Argentina', prefijo_telefonico: '54', moneda: 'ARS',
-        wa_bot_url: `http://127.0.0.1:9/wa-${t.slug}`,
-        wa_bot_key: crypto.randomBytes(16).toString('hex'),
-        lead_api_keys: {
-          'whatsapp-bot': crypto.randomBytes(16).toString('hex'),
-          'sheet-emanuel': crypto.randomBytes(16).toString('hex'),
-        },
-        agent_mcp_key: crypto.randomBytes(16).toString('hex'),
-      },
-    });
-    console.log(`✅ ${t.slug} (#${id}): ${tablas} tablas, ${ids.leads.length + 1} leads, 5 usuarios`);
+    if (!slugs || slugs.includes(t.slug)) await seedTenant(t, password);
   }
-  console.log('\nLogin: owner@demo.test (o gerente/super/vend1/vend2) con DEV_TENANT_PASSWORD, header X-Tenant: tenant-a | tenant-b');
 }
 
-main()
-  .catch((e) => { console.error('❌', e.message); process.exitCode = 1; })
-  .finally(() => closeControlPool());
+module.exports = { seed, borrarTenant, TENANTS };
+
+if (require.main === module) {
+  seed()
+    .then(() => console.log('\nLogin: owner@demo.test (o gerente/super/vend1/vend2) con DEV_TENANT_PASSWORD, header X-Tenant: tenant-a | tenant-b'))
+    .catch((e) => { console.error('❌', e.message); process.exitCode = 1; })
+    .finally(() => closeControlPool());
+}

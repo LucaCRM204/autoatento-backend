@@ -13,7 +13,10 @@
     "tenant:add": "node scripts/tenant-add.js",
     "dev:seed": "node scripts/dev-seed.js",
     "smoke": "node scripts/smoke-isolation.js",
-    "seed:admin": "node seed-admin.js"
+    "seed:admin": "node seed-admin.js",
+    "migrate": "node scripts/migrate.js",
+    "superadmin:add": "node scripts/superadmin-add.js",
+    "smoke:fase2": "node scripts/smoke-fase2.js"
   },
   "dependencies": {
     "axios": "^1.12.2",

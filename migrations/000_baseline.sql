@@ -1,4 +1,12 @@
 -- ============================================
+-- MIGRACIÓN 000 — BASELINE
+-- Es el database.sql del CRM de Fiat (fiat-autodelsol-crm-backend @ fe66ec0),
+-- sin cambios: todo CREATE TABLE IF NOT EXISTS, así que contra una base
+-- existente solo crea las tablas que falten. No editar: los cambios de
+-- esquema van en migraciones nuevas (NNN_descripcion.sql).
+-- ============================================
+
+-- ============================================
 -- AUTO DEL SOL FIAT CRM — Schema MySQL
 -- Basado en la estructura de GoldPlan CRM, sin scoring.
 -- Reconstruido a partir del código (no es un dump real) — revisar antes de

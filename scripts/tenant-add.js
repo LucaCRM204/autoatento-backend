@@ -2,38 +2,38 @@
 /**
  * npm run tenant:add -- --slug <slug> --nombre "<nombre>" (--create-schema | --db-url <mysql://...>) [opciones]
  *
- * Alta de un tenant por línea de comandos (hasta que esté el panel superadmin, Fase 2).
+ * Alta de un tenant por línea de comandos (lo mismo que hace el panel
+ * superadmin: POST /api/superadmin/tenants).
  *
- *   --create-schema           crea crm_<slug> en TENANT_DB_SERVER_URL y carga database.sql
+ *   --create-schema           crea crm_<slug> en TENANT_DB_SERVER_URL y le corre las migraciones
  *   --db-url <url>            usa una base existente (ej. la de un cliente ya en producción).
- *                             NO carga el esquema salvo que pases --load-schema.
+ *                             Corre las migraciones salvo que pases --sin-migrar.
  *   --plan esencial|pro|arm
  *   --dominio <host>          repetible
- *   --owner-email / --owner-password / --owner-name   crea el owner si no existe
- *   --branding-nombre / --logo-url / --color          branding visible
+ *   --owner-email / --owner-name   owner (obligatorio con --create-schema). La contraseña
+ *                             va en la variable OWNER_PASSWORD (no queda en el historial).
+ *   --branding-nombre / --logo-url / --color
  *   --timezone <IANA>         default America/Argentina/Buenos_Aires
- *   --wa-bot-url <url> / --wa-bot-key <key>
- *   --lead-key proveedor:clave                        repetible (API keys de webhooks)
- *   --mcp-key <key> / --openai-key <key>
- *   --modulo nombre=0|1                               repetible
+ *   --wa-bot-url <url>
+ *   --modulo nombre=0|1       repetible
  *
- * Ojo: las claves pasadas por línea de comandos quedan en el historial de la
- * terminal. En la Fase 2 esto se hace desde el panel.
+ * Los secretos (wa_bot_key, lead_api_keys, agent_mcp_key, openai_api_key) se
+ * cargan desde el panel superadmin (PATCH /api/superadmin/tenants/:id), no
+ * por línea de comandos.
  */
 require('../tenancy/env');
 const { parseArgs } = require('util');
 const provision = require('../tenancy/provision');
-const { ensureControlSchema, getControlPool, closeControlPool } = require('../tenancy/control');
+const { ensureControlSchema, closeControlPool } = require('../tenancy/control');
 
 const { values: a } = parseArgs({
   options: {
     slug: { type: 'string' }, nombre: { type: 'string' }, plan: { type: 'string' },
-    'create-schema': { type: 'boolean' }, 'db-url': { type: 'string' }, 'load-schema': { type: 'boolean' },
+    'create-schema': { type: 'boolean' }, 'db-url': { type: 'string' }, 'sin-migrar': { type: 'boolean' },
     dominio: { type: 'string', multiple: true },
-    'owner-email': { type: 'string' }, 'owner-password': { type: 'string' }, 'owner-name': { type: 'string' },
+    'owner-email': { type: 'string' }, 'owner-name': { type: 'string' },
     'branding-nombre': { type: 'string' }, 'logo-url': { type: 'string' }, color: { type: 'string' },
-    timezone: { type: 'string' }, 'wa-bot-url': { type: 'string' }, 'wa-bot-key': { type: 'string' },
-    'lead-key': { type: 'string', multiple: true }, 'mcp-key': { type: 'string' }, 'openai-key': { type: 'string' },
+    timezone: { type: 'string' }, 'wa-bot-url': { type: 'string' },
     modulo: { type: 'string', multiple: true },
   },
 });
@@ -41,31 +41,8 @@ const { values: a } = parseArgs({
 async function main() {
   if (!a.slug || !a.nombre) throw new Error('Faltan --slug y --nombre');
   if (!!a['create-schema'] === !!a['db-url']) throw new Error('Usá --create-schema o --db-url (uno de los dos)');
-  provision.validarSlug(a.slug);
   await ensureControlSchema();
-  const [existe] = await getControlPool().execute('SELECT id FROM tenants WHERE slug = ?', [a.slug]);
-  if (existe.length) throw new Error(`Ya existe un tenant con slug "${a.slug}" (#${existe[0].id}); no se tocó nada`);
 
-  let dbUrl = a['db-url'];
-  if (a['create-schema']) {
-    dbUrl = await provision.createTenantSchema(a.slug);
-    console.log(`🗄️  Schema ${provision.schemaName(a.slug)} creado`);
-  }
-  if (a['create-schema'] || a['load-schema']) {
-    const n = await provision.loadBaseSchema(dbUrl);
-    console.log(`🗄️  Esquema base cargado (${n} tablas)`);
-  }
-  if (a['owner-email']) {
-    const o = await provision.ensureOwner(dbUrl, { email: a['owner-email'], password: a['owner-password'], name: a['owner-name'] });
-    console.log(o.creado ? `👤 Owner creado (#${o.id})` : `👤 El owner ya existía (#${o.id})`);
-  }
-
-  const leadKeys = {};
-  for (const lk of a['lead-key'] || []) {
-    const i = lk.indexOf(':');
-    if (i < 1) throw new Error(`--lead-key inválida (proveedor:clave): ${lk}`);
-    leadKeys[lk.slice(0, i)] = lk.slice(i + 1);
-  }
   const modulos = {};
   for (const m of a.modulo || []) {
     const [k, v] = m.split('=');
@@ -75,21 +52,19 @@ async function main() {
   if (a['branding-nombre']) branding.nombre = a['branding-nombre'];
   if (a['logo-url']) branding.logo_url = a['logo-url'];
   if (a.color) branding.color_primario = a.color;
-
-  const config = {
-    timezone: a.timezone || 'America/Argentina/Buenos_Aires',
-    pais: 'Argentina', prefijo_telefonico: '54', moneda: 'ARS',
-  };
+  const config = { timezone: a.timezone || 'America/Argentina/Buenos_Aires', pais: 'Argentina', prefijo_telefonico: '54', moneda: 'ARS' };
   if (a['wa-bot-url']) config.wa_bot_url = a['wa-bot-url'];
-  if (a['wa-bot-key']) config.wa_bot_key = a['wa-bot-key'];
-  if (Object.keys(leadKeys).length) config.lead_api_keys = leadKeys;
-  if (a['mcp-key']) config.agent_mcp_key = a['mcp-key'];
-  if (a['openai-key']) config.openai_api_key = a['openai-key'];
 
-  const id = await provision.registerTenant({
-    slug: a.slug, nombre: a.nombre, plan: a.plan, dbUrl, dominios: a.dominio || [], modulos, branding, config,
+  const r = await provision.crearTenant({
+    slug: a.slug, nombre: a.nombre, plan: a.plan, dominios: a.dominio || [], modulos, branding, config,
+    dbUrl: a['db-url'] || null,
+    migrar: !a['sin-migrar'],
+    owner: a['owner-email'] ? { email: a['owner-email'], password: process.env.OWNER_PASSWORD, name: a['owner-name'] } : null,
   });
-  console.log(`✅ Tenant "${a.slug}" registrado (#${id})`);
+  if (r.schemaCreado) console.log(`🗄️  Schema ${provision.schemaName(a.slug)} creado`);
+  console.log(r.migraciones.omitidas ? '🗄️  Migraciones omitidas (--sin-migrar)' : `🗄️  Migraciones aplicadas: ${r.migraciones.aplicadas.join(', ') || 'ninguna (al día)'}`);
+  if (r.owner) console.log(r.owner.creado ? `👤 Owner creado (#${r.owner.id})` : `👤 El owner ya existía (#${r.owner.id})`);
+  console.log(`✅ Tenant "${r.slug}" registrado (#${r.id})`);
 }
 
 main()
