@@ -187,7 +187,7 @@ async function tick() {
   st.corriendo = true;
   try {
     const vencidos = await avisarRecordatoriosVencidos().catch((e) => { console.error('[agente] recordatorios vencidos:', e.message); return 0; });
-    if (vencidos) console.log(`⏰ ${vencidos} recordatorios vencidos avisados`);
+    if (vencidos) console.log(`⏰ [${currentTenant()?.slug}] ${vencidos} recordatorios vencidos avisados`);
     const cfg = await config.get();
     // Sin el módulo agente_ia el tenant solo recibe los avisos de recordatorios
     const activo = cfg.mode !== 'off' && !!currentTenant()?.modulos?.agente_ia;
@@ -200,7 +200,7 @@ async function tick() {
       estancados = await scanEstancados(cfg);
     }
     const total = nuevos + estados + respuestas + sla + estancados;
-    if (total) console.log(`🤖 Eventos: ${nuevos} nuevos, ${estados} no contesta, ${respuestas} respuestas, ${sla} SLA, ${estancados} estancados`);
+    if (total) console.log(`🤖 [${currentTenant()?.slug}] Eventos: ${nuevos} nuevos, ${estados} no contesta, ${respuestas} respuestas, ${sla} SLA, ${estancados} estancados`);
   } catch (e) {
     console.error(`[agente] scanner [${currentTenant()?.slug}]:`, e.message);
   } finally {

@@ -1,27 +1,43 @@
+# AutoAtento — entorno local con Docker (para cuando haya Docker disponible).
+# Hoy el desarrollo se prueba contra una MySQL de desarrollo en Railway
+# (DEV_MYSQL_URL en el .env); ver MULTITENANT.md.
+#
+#   docker compose up -d mysql
+#   DEV_MYSQL_URL=mysql://root:rootpassword@localhost:3307/mysql npm run dev:seed
+#
+# El puerto 3307 evita chocar con una MySQL local en 3306.
 version: '3.8'
 services:
   mysql:
     image: mysql:8.0
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: autodelsol_fiat_crm
-      MYSQL_USER: autodelsolfiat_app
-      MYSQL_PASSWORD: change_this_password
+      MYSQL_DATABASE: autoatento_control
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./database.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./control/schema.sql:/docker-entrypoint-initdb.d/01-control.sql
+
+  # Para probar compatibilidad con MariaDB: docker compose --profile mariadb up -d mariadb
+  mariadb:
+    image: mariadb:10.11
+    profiles: ["mariadb"]
+    environment:
+      MARIADB_ROOT_PASSWORD: rootpassword
+      MARIADB_DATABASE: autoatento_control
+    ports:
+      - "3308:3306"
+    volumes:
+      - ./control/schema.sql:/docker-entrypoint-initdb.d/01-control.sql
 
   backend:
     build: .
     ports:
       - "3001:3001"
     environment:
-      DB_HOST: mysql
-      DB_USER: autodelsolfiat_app
-      DB_PASSWORD: change_this_password
-      DB_NAME: autodelsol_fiat_crm
+      DEV_MYSQL_URL: mysql://root:rootpassword@mysql:3306/mysql
+      TENANT_DB_KEY: cambiar_por_64_caracteres_hex
       JWT_SECRET: change_this_jwt_secret
     depends_on:
       - mysql
