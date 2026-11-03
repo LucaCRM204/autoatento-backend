@@ -1,0 +1,23 @@
+node_modules/
+dist/
+*.log
+npm-debug.log*
+.DS_Store
+
+# Secretos: nunca versionar
+.env
+.env.*
+!.env.example
+
+# Datos: dumps de bases y sesiones de WhatsApp
+*.sql.gz
+*.dump
+dumps/
+backups/
+wa-sessions/
+auth_info*/
+.wwebjs_auth/
+
+uploads/
+database.db
+database.sqlite
