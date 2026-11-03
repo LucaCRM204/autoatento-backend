@@ -11,6 +11,7 @@ const { getControlPool } = require('./control');
 const { decrypt, decryptJSON, isEncrypted } = require('./crypto');
 const { normalizarModulos } = require('./modules');
 const env = require('./env');
+const { normHost, slugDeHost } = require('./subdominios');
 
 /** Claves de tenants.config que se guardan cifradas. */
 const SECRET_KEYS = ['wa_bot_key', 'openai_api_key', 'anthropic_api_key', 'agent_mcp_key', 'lead_api_keys'];
@@ -30,7 +31,6 @@ const parseJSON = (v, def) => {
   try { return JSON.parse(v); } catch { return def; }
 };
 
-const normHost = (h) => String(h || '').trim().toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
 
 function hydrate(row) {
   const config = parseJSON(row.config, {}) || {};
@@ -112,10 +112,18 @@ async function getById(id) {
   return c.byId.get(Number(id)) || null;
 }
 
+/**
+ * Tenant de un hostname. Primero los dominios propios cargados en el tenant
+ * (crm.cliente.com.ar, con o sin www); si no, el subdominio automático
+ * <slug>.<BASE_DOMAIN> (ver subdominios.js).
+ */
 async function getByHost(host) {
   const c = await ensure();
   const h = normHost(host);
-  return c.byHost.get(h) || c.byHost.get(h.replace(/^www\./, '')) || null;
+  const propio = c.byHost.get(h) || c.byHost.get(h.replace(/^www\./, ''));
+  if (propio) return propio;
+  const slug = slugDeHost(h);
+  return slug ? c.bySlug.get(slug) || null : null;
 }
 
 /**

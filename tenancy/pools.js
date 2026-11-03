@@ -1,8 +1,11 @@
 /**
  * Pools de MySQL por tenant, creados recién cuando se usan (lazy).
  *
- * - connectionLimit chico (TENANT_POOL_LIMIT, default 4): con decenas de
- *   tenants en un mismo servidor no se agotan las conexiones.
+ * - connectionLimit chico (TENANT_POOL_LIMIT, default 2): con decenas de
+ *   tenants en un mismo servidor no se agotan las conexiones (cálculo en
+ *   MULTITENANT.md, "Capacidad"). Ojo: con un límite tan bajo, una
+ *   transacción que tiene una conexión tomada no puede pedirle otra al pool
+ *   (pasarle la conexión a las funciones que llama), o se traba.
  * - Un pool sin uso por TENANT_POOL_IDLE_MS (default 30 min) se cierra.
  * - Si la db_url del tenant cambia (ej. se lo apunta a otra base), el pool
  *   viejo se cierra y se crea uno nuevo.

@@ -7,6 +7,7 @@
  *
  *   POST  /login
  *   GET   /me
+ *   GET   /config                       dominio base de los subdominios y slugs reservados
  *   GET   /tenants                      lista (sin secretos)
  *   POST  /tenants                      alta: schema + migraciones + owner + registro
  *                                       (o "base existente" con db_url)
@@ -37,6 +38,8 @@ const { disconnectTenant } = require('../tenancy/realtime');
 const { migrateDatabase } = require('../tenancy/migrate');
 const { MODULOS, normalizarModulos } = require('../tenancy/modules');
 const { nowInTz } = require('../tenancy/time');
+const env = require('../tenancy/env');
+const subdominios = require('../tenancy/subdominios');
 const db = require('../db');
 
 const router = express.Router();
@@ -76,6 +79,7 @@ function vistaTenant(row) {
     estado: row.estado,
     plan: row.plan,
     dominios: parseJSON(row.dominios, []),
+    url: subdominios.urlDeSlug(row.slug),
     modulos: normalizarModulos(parseJSON(row.modulos, {})),
     branding: parseJSON(row.branding, {}),
     config: publica,
@@ -112,6 +116,11 @@ async function tenantVivo(id) {
 router.post('/login', h(login));
 router.use(requireSuperadmin);
 router.get('/me', (req, res) => res.json({ ok: true, superadmin: req.superadmin, modulos: Object.keys(MODULOS) }));
+router.get('/config', (_req, res) => res.json({
+  ok: true,
+  base_domain: env.BASE_DOMAIN || null,
+  slugs_reservados: subdominios.RESERVADOS,
+}));
 
 // ---------- tenants ----------
 router.get('/tenants', h(async (_req, res) => {
@@ -243,7 +252,7 @@ router.post('/tenants/:id/impersonar', h(async (req, res) => {
     process.env.JWT_SECRET,
     { expiresIn: '1h' });
   await auditar(req, 'impersonar', t.id, { slug: t.slug, user_id: user.id, user_email: user.email, motivo: req.body?.motivo || null });
-  res.json({ ok: true, slug: t.slug, dominios: t.dominios, token, expira_en: '1h', user });
+  res.json({ ok: true, slug: t.slug, dominios: t.dominios, url: subdominios.urlDeSlug(t.slug), token, expira_en: '1h', user });
 }));
 
 // ---------- uso de todos (facturación) ----------

@@ -29,6 +29,14 @@ function tenantServerUrl() {
   throw new Error('Falta TENANT_DB_SERVER_URL (o DEV_MYSQL_URL en desarrollo)');
 }
 
+/**
+ * Dominio base de los subdominios automáticos: con BASE_DOMAIN=autoatento.com.ar,
+ * <slug>.autoatento.com.ar resuelve el tenant por slug sin cargarlo en "dominios".
+ * Se normaliza: minúsculas, sin "*." ni puntos sobrantes ni esquema.
+ */
+const BASE_DOMAIN = String(process.env.BASE_DOMAIN || '').trim().toLowerCase()
+  .replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^\*?\.+/, '').replace(/\.+$/, '');
+
 const num = (v, def) => (Number.isFinite(Number(v)) && v !== '' && v != null ? Number(v) : def);
 
 module.exports = {
@@ -36,7 +44,8 @@ module.exports = {
   withDatabase,
   controlDbUrl,
   tenantServerUrl,
-  TENANT_POOL_LIMIT: num(process.env.TENANT_POOL_LIMIT, 4),
+  BASE_DOMAIN,
+  TENANT_POOL_LIMIT: Math.max(1, num(process.env.TENANT_POOL_LIMIT, 2)),
   TENANT_POOL_IDLE_MS: num(process.env.TENANT_POOL_IDLE_MS, 30 * 60 * 1000),
   TENANT_CACHE_TTL_MS: num(process.env.TENANT_CACHE_TTL_MS, 30 * 1000),
 };

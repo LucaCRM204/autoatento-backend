@@ -3,7 +3,7 @@
  * npm run smoke   (correr antes `npm run dev:seed`)
  *
  * Verificación de la Fase 1: levanta el server en un puerto libre contra los
- * tenants de desarrollo (tenant-a "Alfa" / tenant-b "Bravo") y comprueba que
+ * tenants de desarrollo (demo-norte "Norte" / demo-sur "Sur") y comprueba que
  * todo queda aislado por tenant:
  *   - resolución de tenant (header, path, 400/404/402)
  *   - tid del JWT (token de A en B -> 401, token sin tid -> 401)
@@ -26,8 +26,8 @@ const registry = require('../tenancy/registry');
 const { getControlPool, closeControlPool } = require('../tenancy/control');
 
 const PASSWORD = process.env.DEV_TENANT_PASSWORD;
-const A = { slug: 'tenant-a', marca: 'Alfa', otra: 'Bravo' };
-const B = { slug: 'tenant-b', marca: 'Bravo', otra: 'Alfa' };
+const A = { slug: 'demo-norte', marca: 'Norte', otra: 'Sur' };
+const B = { slug: 'demo-sur', marca: 'Sur', otra: 'Norte' };
 
 const resultados = [];
 const avisos = [];
@@ -83,10 +83,11 @@ async function main() {
   try {
     // ---------- Resolución de tenant ----------
     check('health sin tenant -> 200', (await http.get('/health')).status === 200);
-    const pub = await http.get('/public/tenant', { params: { host: 'tenant-a.localhost' } });
+    const pub = await http.get('/public/tenant', { params: { host: 'demo-norte.localhost' } });
     const pubTxt = JSON.stringify(pub.data);
-    check('public/tenant por host -> datos de A', pub.status === 200 && pub.data.slug === 'tenant-a' && pub.data.branding?.nombre === 'Concesionaria Alfa' && pub.data.modulos?.agente_ia === true);
+    check('public/tenant por host -> datos de A', pub.status === 200 && pub.data.slug === 'demo-norte' && pub.data.branding?.nombre === 'Concesionaria Demo Norte' && pub.data.modulos?.agente_ia === true);
     check('public/tenant no expone secretos', !/mysql:|v1:|lead_api_keys|wa_bot_key|agent_mcp_key|password/i.test(pubTxt) && !Object.values(A.keys).some((k) => pubTxt.includes(k)), pubTxt);
+    check('public/tenant por dominio propio (crm.demo-norte.test) -> A', (await http.get('/public/tenant', { params: { host: 'crm.demo-norte.test' } })).data?.slug === 'demo-norte');
     check('public/tenant host desconocido -> 404', (await http.get('/public/tenant', { params: { host: 'nadie.localhost' } })).status === 404);
     check('/api/leads sin X-Tenant -> 400', (await http.get('/leads')).status === 400);
     check('/api/leads tenant inexistente -> 404', (await http.get('/leads', { headers: { 'X-Tenant': 'no-existe' } })).status === 404);
@@ -104,7 +105,7 @@ async function main() {
     check('token de B en A -> 401', (await http.get('/leads', as(A, B.token))).status === 401);
     const sinTid = jwt.sign({ id: 1, uid: 1, role: 'owner' }, process.env.JWT_SECRET, { expiresIn: '5m' });
     check('token sin tid -> 401', (await http.get('/leads', as(A, sinTid))).status === 401);
-    check('cookie de sesión por tenant', (await http.post('/auth/login', { email: 'owner@demo.test', password: PASSWORD }, as(A))).headers['set-cookie']?.some((c) => c.startsWith('session_tenant-a=')));
+    check('cookie de sesión por tenant', (await http.post('/auth/login', { email: 'owner@demo.test', password: PASSWORD }, as(A))).headers['set-cookie']?.some((c) => c.startsWith('session_demo-norte=')));
     const me = await http.get('/auth/me', as(A, A.token));
     check('/auth/me con token de A', me.status === 200 && me.data.email === 'owner@demo.test');
 
@@ -155,7 +156,7 @@ async function main() {
       }
       check(`${t.slug}: ${n} rutas GET responden 200 solo con sus datos (403 si el módulo está apagado)`, !fallas.length, fallas.join('\n     '));
     }
-    check('tenant-b: metas y agente_ia apagados -> sus rutas dan 403', apagadas.has('tenant-b:metas') && apagadas.has('tenant-b:agente_ia'), [...apagadas].join(','));
+    check('demo-sur: metas y agente_ia apagados -> sus rutas dan 403', apagadas.has('demo-sur:metas') && apagadas.has('demo-sur:agente_ia'), [...apagadas].join(','));
     check('el mismo módulo prendido en A responde', (await http.get('/metas', as(A, A.token))).status === 200);
 
     // calls / metas / users ahora piden token
@@ -164,38 +165,38 @@ async function main() {
     }
 
     // ---------- Escrituras por tenant ----------
-    const nota = await http.post(`/notas/leads/${A.leadId}/notas`, { texto: 'Nota nueva Alfa' }, as(A, A.token));
+    const nota = await http.post(`/notas/leads/${A.leadId}/notas`, { texto: 'Nota nueva Norte' }, as(A, A.token));
     check('POST nota en A', nota.status === 200, JSON.stringify(nota.data));
     const notasB = await http.get(`/notas/leads/${B.leadId}/notas`, as(B, B.token));
-    check('la nota de A no aparece en B (mismo id de lead)', notasB.status === 200 && !JSON.stringify(notasB.data).includes('Nota nueva Alfa'));
+    check('la nota de A no aparece en B (mismo id de lead)', notasB.status === 200 && !JSON.stringify(notasB.data).includes('Nota nueva Norte'));
 
     // ---------- Webhooks por path ----------
-    const wh = await http.post('/t/tenant-a/webhooks/whatsapp-bot', { nombre: 'Webhook Alfa', telefono: `114${String(Date.now()).slice(-7)}`, modelo: 'Pulse' }, { headers: { 'x-api-key': A.keys['whatsapp-bot'] } });
-    check('webhook /api/t/tenant-a con key de A -> 200', wh.status === 200 && wh.data.lead?.nombre === 'Webhook Alfa', JSON.stringify(wh.data));
-    check('webhook /api/t/tenant-a con key de B -> 401',
-      (await http.post('/t/tenant-a/webhooks/whatsapp-bot', { nombre: 'X', telefono: '1' }, { headers: { 'x-api-key': B.keys['whatsapp-bot'] } })).status === 401);
+    const wh = await http.post('/t/demo-norte/webhooks/whatsapp-bot', { nombre: 'Webhook Norte', telefono: `114${String(Date.now()).slice(-7)}`, modelo: 'Pulse' }, { headers: { 'x-api-key': A.keys['whatsapp-bot'] } });
+    check('webhook /api/t/demo-norte con key de A -> 200', wh.status === 200 && wh.data.lead?.nombre === 'Webhook Norte', JSON.stringify(wh.data));
+    check('webhook /api/t/demo-norte con key de B -> 401',
+      (await http.post('/t/demo-norte/webhooks/whatsapp-bot', { nombre: 'X', telefono: '1' }, { headers: { 'x-api-key': B.keys['whatsapp-bot'] } })).status === 401);
     check('webhook path A + header X-Tenant B -> 400',
-      (await http.post('/t/tenant-a/webhooks/whatsapp-bot', { nombre: 'X', telefono: '1' }, { headers: { 'x-api-key': A.keys['whatsapp-bot'], 'X-Tenant': 'tenant-b' } })).status === 400);
-    const sh = await http.post('/t/tenant-b/webhooks/sheets', { nombre: 'Sheet Bravo', telefono: '1133330000' }, { headers: { 'x-api-key': B.keys['sheet-emanuel'] } });
+      (await http.post('/t/demo-norte/webhooks/whatsapp-bot', { nombre: 'X', telefono: '1' }, { headers: { 'x-api-key': A.keys['whatsapp-bot'], 'X-Tenant': 'demo-sur' } })).status === 400);
+    const sh = await http.post('/t/demo-sur/webhooks/sheets', { nombre: 'Sheet Sur', telefono: '1133330000' }, { headers: { 'x-api-key': B.keys['sheet-emanuel'] } });
     check('webhook sheets en B (fuente Emanuel)', sh.status === 200 && sh.data.fuente === 'Emanuel', JSON.stringify(sh.data));
     const leadsB = JSON.stringify((await http.get('/leads', as(B, B.token))).data);
-    check('lead del webhook de A no está en B', !leadsB.includes('Webhook Alfa') && leadsB.includes('Sheet Bravo'));
+    check('lead del webhook de A no está en B', !leadsB.includes('Webhook Norte') && leadsB.includes('Sheet Sur'));
 
     // ---------- Marcas del tenant (config.marcas / marca_default) ----------
     const marcaDe = async (t, id) => (await http.get(`/leads/${id}`, as(t, t.token))).data?.lead?.marca;
     check('webhook en A sin marca -> marca_default de A (fiat)', (await marcaDe(A, wh.data.leadId)) === 'fiat');
     check('webhook sheets en B sin marca -> marca_default de B (peugeot)', (await marcaDe(B, sh.data.leadId)) === 'peugeot');
     const telNuevo = () => `115${String(Date.now()).slice(-7)}`;
-    const whC = await http.post('/t/tenant-b/webhooks/whatsapp-bot', { nombre: 'Marca Bravo C', telefono: telNuevo(), marca: 'Citroen' }, { headers: { 'x-api-key': B.keys['whatsapp-bot'] } });
+    const whC = await http.post('/t/demo-sur/webhooks/whatsapp-bot', { nombre: 'Marca Sur C', telefono: telNuevo(), marca: 'Citroen' }, { headers: { 'x-api-key': B.keys['whatsapp-bot'] } });
     check('webhook en B con marca habilitada (citroen) -> la usa', (await marcaDe(B, whC.data.leadId)) === 'citroen', JSON.stringify(whC.data).slice(0, 200));
-    const whF = await http.post('/t/tenant-b/webhooks/whatsapp-bot', { nombre: 'Marca Bravo F', telefono: telNuevo(), marca: 'fiat' }, { headers: { 'x-api-key': B.keys['whatsapp-bot'] } });
+    const whF = await http.post('/t/demo-sur/webhooks/whatsapp-bot', { nombre: 'Marca Sur F', telefono: telNuevo(), marca: 'fiat' }, { headers: { 'x-api-key': B.keys['whatsapp-bot'] } });
     check('webhook en B con marca no habilitada (fiat) -> marca_default', (await marcaDe(B, whF.data.leadId)) === 'peugeot');
     check('alta manual en B con marca no habilitada -> 400',
-      (await http.post('/leads', { nombre: 'Manual Bravo', telefono: telNuevo(), modelo: '208', marca: 'fiat' }, as(B, B.token))).status === 400);
-    const manual = await http.post('/leads', { nombre: 'Manual Bravo Ok', telefono: telNuevo(), modelo: '208' }, as(B, B.token));
+      (await http.post('/leads', { nombre: 'Manual Sur', telefono: telNuevo(), modelo: '208', marca: 'fiat' }, as(B, B.token))).status === 400);
+    const manual = await http.post('/leads', { nombre: 'Manual Sur Ok', telefono: telNuevo(), modelo: '208' }, as(B, B.token));
     check('alta manual en B sin marca -> marca_default', manual.status === 200 && manual.data.lead?.marca === 'peugeot', JSON.stringify(manual.data).slice(0, 200));
     check('/public/tenant expone marcas y marca_default',
-      JSON.stringify((await http.get('/public/tenant', { params: { slug: 'tenant-b' } })).data.config) === JSON.stringify({ timezone: 'America/Montevideo', pais: 'Argentina', prefijo_telefonico: '54', moneda: 'ARS', wa_bot_url: 'http://127.0.0.1:9/wa-tenant-b', marcas: ['peugeot', 'citroen'], marca_default: 'peugeot' }));
+      JSON.stringify((await http.get('/public/tenant', { params: { slug: 'demo-sur' } })).data.config) === JSON.stringify({ timezone: 'America/Montevideo', pais: 'Argentina', prefijo_telefonico: '54', moneda: 'ARS', wa_bot_url: 'http://127.0.0.1:9/wa-demo-sur', marcas: ['peugeot', 'citroen'], marca_default: 'peugeot' }));
 
     // ---------- Sockets ----------
     const conectar = (t, token, slug = t.slug) => new Promise((resolve) => {
@@ -208,7 +209,7 @@ async function main() {
     const sA = await conectar(A, A.token);
     const sB = await conectar(B, B.token);
     const sVendA = await conectar(A, A.vendToken);
-    const sCruzado = await conectar(B, A.token, 'tenant-b');
+    const sCruzado = await conectar(B, A.token, 'demo-sur');
     check('socket A conecta', sA.ok, sA.error);
     check('socket B conecta', sB.ok, sB.error);
     check('socket con token de A pidiendo tenant B -> rechazado', !sCruzado.ok);
@@ -222,15 +223,15 @@ async function main() {
 
     // Teléfono distinto en cada corrida (leads.js rechaza duplicados de menos de 5 min)
     const tel = `11${String(Date.now()).slice(-8)}`;
-    const creado = await http.post('/leads', { nombre: 'Socket Alfa', telefono: tel, modelo: 'Cronos' }, as(A, A.token));
+    const creado = await http.post('/leads', { nombre: 'Socket Norte', telefono: tel, modelo: 'Cronos' }, as(A, A.token));
     check('POST /leads en A', creado.status === 200, JSON.stringify(creado.data).slice(0, 200));
     // Evento dirigido a un usuario (lead:offer / notification por emitToUser) vía reenvío del cliente
     sVendA.s.emit('presence:active');
     await sleep(2000);
     const evA = sA.recibidos.filter((x) => x.ev === 'lead:created').map((x) => x.data?.nombre);
     const evB = sB.recibidos.map((x) => JSON.stringify(x.data || '')).join(' ');
-    check('socket A recibe lead:created de A', evA.includes('Socket Alfa'), JSON.stringify(sA.recibidos.map((x) => x.ev)));
-    check('socket B no recibe nada de A', !evB.includes('Alfa') && !sB.recibidos.some((x) => x.ev === 'lead:created'), evB.slice(0, 300));
+    check('socket A recibe lead:created de A', evA.includes('Socket Norte'), JSON.stringify(sA.recibidos.map((x) => x.ev)));
+    check('socket B no recibe nada de A', !evB.includes('Norte') && !sB.recibidos.some((x) => x.ev === 'lead:created'), evB.slice(0, 300));
     const onlineA = sA.recibidos.filter((x) => x.ev === 'users:online').pop()?.data || [];
     const onlineB = sB.recibidos.filter((x) => x.ev === 'users:online').pop()?.data || [];
     check('presencia separada: users:online de B no incluye usuarios de A', onlineB.length >= 1 && !onlineB.includes(A.vendId) && onlineA.includes(A.vendId), `A=${JSON.stringify(onlineA)} B=${JSON.stringify(onlineB)}`);
@@ -266,7 +267,7 @@ async function main() {
 
     // ---------- Estados del tenant ----------
     const ctrl = getControlPool();
-    await ctrl.execute("UPDATE tenants SET estado = 'suspendido' WHERE slug = 'tenant-b'");
+    await ctrl.execute("UPDATE tenants SET estado = 'suspendido' WHERE slug = 'demo-sur'");
     await sleep(800);
     const susp = await http.get('/leads', as(B, B.token));
     check('tenant suspendido -> 402', susp.status === 402 && /suspendida/.test(susp.data.error), JSON.stringify(susp.data));
@@ -274,10 +275,10 @@ async function main() {
     const sSusp = await conectar(B, B.token);
     check('socket a tenant suspendido -> rechazado', !sSusp.ok);
     sSusp.s.close();
-    await ctrl.execute("UPDATE tenants SET estado = 'baja' WHERE slug = 'tenant-b'");
+    await ctrl.execute("UPDATE tenants SET estado = 'baja' WHERE slug = 'demo-sur'");
     await sleep(800);
     check('tenant de baja -> 404', (await http.get('/leads', as(B, B.token))).status === 404);
-    await ctrl.execute("UPDATE tenants SET estado = 'activo' WHERE slug = 'tenant-b'");
+    await ctrl.execute("UPDATE tenants SET estado = 'activo' WHERE slug = 'demo-sur'");
     await sleep(800);
     check('tenant reactivado -> 200', (await http.get('/leads', as(B, B.token))).status === 200);
 

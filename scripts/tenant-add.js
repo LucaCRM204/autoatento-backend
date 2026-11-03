@@ -9,7 +9,8 @@
  *   --db-url <url>            usa una base existente (ej. la de un cliente ya en producción).
  *                             Corre las migraciones salvo que pases --sin-migrar.
  *   --plan esencial|pro|arm
- *   --dominio <host>          repetible
+ *   --dominio <host>          repetible: dominios propios del cliente (el subdominio
+ *                             <slug>.<BASE_DOMAIN> funciona solo, no se carga acá)
  *   --owner-email / --owner-name   owner (obligatorio con --create-schema). La contraseña
  *                             va en la variable OWNER_PASSWORD (no queda en el historial).
  *   --branding-nombre / --logo-url / --color
@@ -72,6 +73,8 @@ async function main() {
   console.log(r.migraciones.omitidas ? '🗄️  Migraciones omitidas (--sin-migrar)' : `🗄️  Migraciones aplicadas: ${r.migraciones.aplicadas.join(', ') || 'ninguna (al día)'}`);
   if (r.owner) console.log(r.owner.creado ? `👤 Owner creado (#${r.owner.id})` : `👤 El owner ya existía (#${r.owner.id})`);
   console.log(`✅ Tenant "${r.slug}" registrado (#${r.id})`);
+  const url = require('../tenancy/subdominios').urlDeSlug(r.slug);
+  console.log(url ? `🌐 ${url}` : '🌐 Sin BASE_DOMAIN: el CRM se abre solo por sus dominios propios');
 }
 
 main()

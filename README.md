@@ -24,11 +24,18 @@ Repos: `autoatento-backend` (este) y `autoatento-frontend`.
 |---|---|---|
 | `npm install` | `npm.cmd install` | Dependencias |
 | `npm run control:init` | `npm.cmd run control:init` | Crea la base de control `autoatento_control` |
-| `npm run dev:seed` | `npm.cmd run dev:seed` | **Borra y recrea** los tenants de desarrollo `tenant-a` y `tenant-b` |
+| `npm run dev:seed` | `npm.cmd run dev:seed` | **Borra y recrea** los tenants de desarrollo `demo-norte` y `demo-sur` |
 | `npm run dev` | `npm.cmd run dev` | Server en http://localhost:3001 |
 | `npm run migrate` | `npm.cmd run migrate` | Migraciones pendientes de todos los tenants activos (`-- --dry-run` para ver) |
 
-Usuarios de `dev:seed` (en los dos tenants, con la contraseña `DEV_TENANT_PASSWORD`):
+Tenants de `dev:seed`:
+
+| Slug | Nombre | Qué tiene |
+|---|---|---|
+| `demo-norte` | Concesionaria Demo Norte | marca Fiat, todos los módulos |
+| `demo-sur` | Concesionaria Demo Sur | marcas Peugeot y Citroën, zona Montevideo, sin Agente IA ni Metas |
+
+Usuarios (en los dos tenants, con la contraseña `DEV_TENANT_PASSWORD`):
 `owner@demo.test`, `gerente@demo.test`, `super@demo.test`, `vend1@demo.test`, `vend2@demo.test`.
 
 Superadmin para el panel:
@@ -57,33 +64,40 @@ El `.env` del front lleva:
 
 ```
 VITE_API_URL=http://localhost:3001/api
-VITE_DEV_TENANT=tenant-a
+VITE_DEV_TENANT=demo-norte
 ```
 
 | URL | Qué abre |
 |---|---|
-| http://localhost:5173 | CRM de `tenant-a` |
-| http://localhost:5173/?tenant=tenant-b | CRM de `tenant-b` (también http://tenant-b.localhost:5173) |
+| http://localhost:5173 | CRM de `demo-norte` (también http://demo-norte.localhost:5173) |
+| http://demo-sur.localhost:5173 | CRM de `demo-sur` (también http://localhost:5173/?tenant=demo-sur) |
 | http://localhost:5173/superadmin | Panel de AutoAtento |
 
 Chequeo de tipos y build: `npm run build` (o `npm.cmd run build`).
+
+## Dominios
+
+- **Subdominio automático:** con `BASE_DOMAIN=autoatento.com.ar`, cada tenant abre en `https://<slug>.autoatento.com.ar` sin cargar nada (hace falta el wildcard `*.autoatento.com.ar` en Vercel: [MULTITENANT.md, sección 7](MULTITENANT.md)). Por eso el slug de un tenant nuevo tiene que servir como subdominio.
+- **Dominio propio del cliente** (ej. `crm5alluma.com.ar`): se carga en *Dominios propios* del panel, como antes.
+- **En desarrollo:** `<slug>.localhost` anda para cualquier tenant.
 
 ## Producción y migración de clientes
 
 - **Deploy** (GitHub, Railway y Vercel), **Día D de Fiat** con rollback, y checklist para migrar otros clones: [MULTITENANT.md, sección 14](MULTITENANT.md).
 - **Comparar el esquema de otro clon** (solo lectura): `npm.cmd run comparar-esquema -- --clon '<mysql://...>' --referencia <slug> --salida informe.md`.
+- **Capacidad** (conexiones a MySQL según la cantidad de tenants, `TENANT_POOL_LIMIT`): [MULTITENANT.md, sección 15](MULTITENANT.md).
 - **Archivos de Railway:** `railway.json` (Dockerfile, healthcheck `/api/health`, 1 réplica) y `Dockerfile` (Node 22).
 
 ## Tests
 
 | bash | PowerShell 5 | Qué prueba | Duración |
 |---|---|---|---|
-| `npm test` | `npm.cmd test` | **Tests de aislamiento** (node:test + supertest, 53 tests) | ~1,5 min |
-| `npm run smoke` | `npm.cmd run smoke` | Smoke de la Fase 1 (53 checks). Correrlo después de `dev:seed` | ~1 min |
+| `npm test` | `npm.cmd test` | **Tests de aislamiento** (node:test + supertest, 61 tests) | ~1,5 min |
+| `npm run smoke` | `npm.cmd run smoke` | Smoke de la Fase 1 (54 checks). Correrlo después de `dev:seed` | ~1 min |
 | `npm run smoke:fase2` | `npm.cmd run smoke:fase2` | Smoke de la Fase 2 (50 checks). Al final deja todo como `dev:seed` | ~2 min |
 
 `npm test`:
-- **Tenants propios:** crea sus propios tenants en la base de desarrollo (`crm_test_<id>_a` y `crm_test_<id>_b`) y los borra al terminar. No toca `tenant-a` ni `tenant-b`.
+- **Tenants propios:** crea sus propios tenants en la base de desarrollo (`crm_test_<id>_a` y `crm_test_<id>_b`) y los borra al terminar. No toca `demo-norte` ni `demo-sur`.
 - **Server real:** levanta el server en un puerto libre (con sockets y tareas en segundo plano), así que no hace falta tener nada corriendo.
 
 **Qué cubre:**
@@ -92,6 +106,7 @@ Chequeo de tipos y build: `npm run build` (o `npm.cmd run build`).
 - webhooks con la key de otro tenant → 401;
 - sockets aislados;
 - tareas en segundo plano por tenant;
+- subdominios automáticos (`<slug>.BASE_DOMAIN`), dominio propio y slugs que no sirven como subdominio;
 - tenant suspendido → 402 y corte de sockets;
 - módulo apagado → 403;
 - panel superadmin: sin token no entra, el token de un owner no sirve ahí y el del panel no sirve en un CRM.

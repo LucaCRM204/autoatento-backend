@@ -19,6 +19,7 @@ const { encrypt, encryptJSON } = require('./crypto');
 const { SECRET_KEYS, normHost, invalidate } = require('./registry');
 const { MODULOS } = require('./modules');
 const { migrateDatabase } = require('./migrate');
+const { problemaSlug, esDeBaseDomain } = require('./subdominios');
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
 const PLANES = ['esencial', 'pro', 'arm'];
@@ -46,6 +47,12 @@ function validarSlug(slug) {
   if (!SLUG_RE.test(String(slug || ''))) {
     fail('Slug inválido: minúsculas, números y guiones (máx. 60), empezando con letra o número');
   }
+}
+
+/** Slug de un tenant nuevo: además tiene que servir como subdominio <slug>.<BASE_DOMAIN>. */
+function validarSlugNuevo(slug) {
+  const problema = problemaSlug(slug);
+  if (problema) fail(problema);
 }
 
 /** Connection string sin contraseña, para mostrar. */
@@ -150,7 +157,12 @@ function normalizarDominios(dominios) {
   if (dominios === undefined) return undefined;
   if (!Array.isArray(dominios)) fail('dominios tiene que ser una lista');
   const out = [...new Set(dominios.map(normHost).filter(Boolean))];
-  for (const d of out) if (!HOST_RE.test(d)) fail(`Dominio inválido: ${d}`);
+  for (const d of out) {
+    if (!HOST_RE.test(d)) fail(`Dominio inválido: ${d}`);
+    if (esDeBaseDomain(d)) {
+      fail(`${d} no se carga como dominio: los subdominios de ${env.BASE_DOMAIN} son automáticos (<slug>.${env.BASE_DOMAIN})`);
+    }
+  }
   return out;
 }
 
@@ -287,7 +299,7 @@ async function slugOcupado(slug) {
  * Devuelve { id, slug, schemaCreado, migraciones, owner, base }.
  */
 async function crearTenant(opts) {
-  validarSlug(opts.slug);
+  validarSlugNuevo(opts.slug);
   if (!opts.nombre) fail('Falta el nombre');
   if (opts.plan && !PLANES.includes(opts.plan)) fail(`Plan inválido (${PLANES.join(', ')})`);
   // Validar todo lo validable antes de tocar ninguna base
@@ -394,5 +406,5 @@ async function actualizarTenant(id, cambios = {}) {
 module.exports = {
   crearTenant, actualizarTenant, registerTenant, ensureOwner, testConnection,
   createTenantSchema, dropTenantSchema, schemaTableCount, runSqlFile, mergeConfig,
-  validarSlug, schemaName, quoteId, maskDbUrl, PLANES, ESTADOS, CONFIG_KEYS, BRANDING_KEYS,
+  validarSlug, validarSlugNuevo, schemaName, quoteId, maskDbUrl, PLANES, ESTADOS, CONFIG_KEYS, BRANDING_KEYS,
 };

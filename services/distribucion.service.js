@@ -558,9 +558,14 @@ async function elegirEnScope(conn, scope, idsHabilitados) {
   return elegido;
 }
 
-/** Miembros del scope que pueden recibir ahora mismo (doble chequeo). */
-async function idsHabilitados(scope) {
-  const [rows] = await pool.query(
+/**
+ * Miembros del scope que pueden recibir ahora mismo (doble chequeo).
+ * Dentro de una transacción hay que pasarle su conexión: con pools chicos
+ * (TENANT_POOL_LIMIT=2) pedirle otra al pool con una ya tomada traba todo
+ * cuando llegan dos leads a la vez.
+ */
+async function idsHabilitados(scope, conn = pool) {
+  const [rows] = await conn.query(
     `SELECT d.user_id
        FROM distribucion_pesos d
        JOIN users u ON u.id = d.user_id
@@ -599,7 +604,7 @@ async function siguienteVendedor(equipoId, leadId = null, fuente = null) {
 
     for (let nivel = 0; nivel < PROFUNDIDAD_MAX; nivel++) {
       const scope = scopeDe(nodo);
-      const ids = await idsHabilitados(scope);
+      const ids = await idsHabilitados(scope, conn);
 
       elegido = await elegirEnScope(conn, scope, ids);
       if (!elegido) break;

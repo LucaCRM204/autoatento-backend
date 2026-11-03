@@ -10,7 +10,7 @@
  * information_schema y algunos SELECT DISTINCT / COUNT. No escribe nada.
  *
  *   --clon         connection string de la base del clon (usar un usuario de solo lectura si se puede)
- *   --referencia   slug de un tenant de AutoAtento ya migrado (default: tenant-a) o connection string
+ *   --referencia   slug de un tenant de AutoAtento ya migrado (default: demo-norte) o connection string
  *   --salida       archivo .md donde guardar el informe (si no, va a la consola)
  */
 require('../tenancy/env');
@@ -105,7 +105,7 @@ function comparar(ref, clon) {
 
 async function main() {
   if (!a.clon) throw new Error('Falta --clon <mysql://...>');
-  let refUrl = a.referencia || 'tenant-a';
+  let refUrl = a.referencia || 'demo-norte';
   if (!/^mysql:\/\//.test(refUrl)) {
     const t = await registry.getBySlug(refUrl);
     if (!t) throw new Error(`No existe el tenant de referencia "${refUrl}"`);

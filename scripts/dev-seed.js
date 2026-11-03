@@ -4,13 +4,15 @@
  *
  * SOLO DESARROLLO. Arma dos tenants locales con datos distintos para probar
  * el aislamiento:
- *   tenant-a  "Concesionaria Alfa"   dominio tenant-a.localhost   (todo con la palabra "Alfa")
- *   tenant-b  "Concesionaria Bravo"  dominio tenant-b.localhost   (todo con la palabra "Bravo",
- *                                                                 módulo agente_ia apagado)
+ *   demo-norte  "Concesionaria Demo Norte"  (todo con la palabra "Norte")
+ *   demo-sur    "Concesionaria Demo Sur"    (todo con la palabra "Sur";
+ *                                            módulos agente_ia y metas apagados)
+ * Se abren en http://<slug>.localhost:5173 (subdominio automático) o con el
+ * dominio propio simulado crm.<slug>.test (solo para probar la API).
  *
- * Cada corrida BORRA y recrea los schemas crm_tenant-a / crm_tenant-b y sus
- * filas en autoatento_control. Por seguridad solo toca esos dos slugs y se
- * niega a correr con NODE_ENV=production.
+ * Cada corrida BORRA y recrea los schemas crm_demo-norte / crm_demo-sur y sus
+ * filas en autoatento_control (y los tenant-a / tenant-b de antes, si quedaron).
+ * Por seguridad solo toca esos slugs y se niega a correr con NODE_ENV=production.
  *
  * Usuarios (los mismos emails en los dos tenants, contraseña DEV_TENANT_PASSWORD):
  *   owner@demo.test, gerente@demo.test, super@demo.test, vend1@demo.test, vend2@demo.test
@@ -25,11 +27,13 @@ const { ensureControlSchema, createControlDatabase, getControlPool, closeControl
 const { nowInTz } = require('../tenancy/time');
 
 const TENANTS = [
-  { slug: 'tenant-a', marca: 'Alfa', marcas: ['fiat'], tz: 'America/Argentina/Buenos_Aires', color: '#2563eb', modulos: {} },
-  // B: dos marcas y dos módulos apagados (agente IA y metas) para probar el menú y el 403
-  { slug: 'tenant-b', marca: 'Bravo', marcas: ['peugeot', 'citroen'], tz: 'America/Montevideo', color: '#16a34a', modulos: { agente_ia: false, metas: false } },
+  { slug: 'demo-norte', nombre: 'Concesionaria Demo Norte', marca: 'Norte', marcas: ['fiat'], tz: 'America/Argentina/Buenos_Aires', color: '#2563eb', modulos: {}, tel: '' },
+  // Sur: dos marcas y dos módulos apagados (agente IA y metas) para probar el menú y el 403
+  { slug: 'demo-sur', nombre: 'Concesionaria Demo Sur', marca: 'Sur', marcas: ['peugeot', 'citroen'], tz: 'America/Montevideo', color: '#16a34a', modulos: { agente_ia: false, metas: false }, tel: '9' },
 ];
-const PERMITIDOS = new Set(TENANTS.map((t) => t.slug));
+/** Tenants de desarrollo de versiones anteriores del seed: se borran si quedaron. */
+const ANTERIORES = ['tenant-a', 'tenant-b'];
+const PERMITIDOS = new Set([...TENANTS.map((t) => t.slug), ...ANTERIORES]);
 
 async function borrarTenant(slug) {
   if (!PERMITIDOS.has(slug)) throw new Error(`dev-seed no borra "${slug}"`);
@@ -66,7 +70,7 @@ async function cargarDatos(dbUrl, t, password) {
       leads.push(await ins(
         `INSERT INTO leads (nombre, telefono, modelo, marca, formaPago, estado, fuente, notas, assigned_to, created_by, created_at, assigned_at)
          VALUES (?, ?, ?, ?, 'Contado', ?, 'community', ?, ?, ?, NOW(), NOW())`,
-        [`Cliente ${M} ${i + 1}`, `${t.slug === 'tenant-a' ? '' : '9'}${tel}`, `Modelo ${M}`, t.marcas[0], estado, `Nota del lead ${M}`, vend, owner.id]));
+        [`Cliente ${M} ${i + 1}`, `${t.tel}${tel}`, `Modelo ${M}`, t.marcas[0], estado, `Nota del lead ${M}`, vend, owner.id]));
     }
     // Lead con oferta de aceptación vencida: el checker (loop) lo tiene que pasar a vend2
     const ofertado = await ins(
@@ -90,7 +94,7 @@ async function cargarDatos(dbUrl, t, password) {
     await c.execute("INSERT INTO presupuestos (modelo, marca, precio_contado, created_by) VALUES (?, ?, 1500000, ?)", [`Presupuesto ${M}`, t.marcas[0], owner.id]);
     await c.execute("INSERT INTO metas (vendedor_id, mes, meta_ventas, meta_leads, created_by) VALUES (?, ?, 5, 20, ?)", [v1, nowInTz(t.tz).monthKey, gerente]);
     await c.execute("INSERT INTO call_logs (lead_id, user_id, telefono, duracion_segundos, resultado, notas) VALUES (?, ?, '1155550001', 60, 'contactado', ?)", [l1, v1, `Llamada ${M}`]);
-    const phone = `54911555500${t.slug === 'tenant-a' ? '01' : '91'}`;
+    const phone = `54911555500${t.tel ? '91' : '01'}`;
     await c.execute("INSERT INTO wa_conversations (phone, session_id, nombre, modelo) VALUES (?, ?, ?, ?)", [phone, `user_${v1}`, `Cliente ${M} 1`, `Modelo ${M}`]);
     await c.execute("INSERT INTO wa_messages (session_id, lead_id, phone, direction, message) VALUES (?, ?, ?, 'in', ?)", [`user_${v1}`, l1, phone, `Hola, mensaje de WhatsApp ${M}`]);
     await c.execute("INSERT INTO wa_messages (session_id, lead_id, phone, direction, message) VALUES (?, ?, ?, 'out', ?)", [`user_${v1}`, l1, phone, `Respuesta WhatsApp ${M}`]);
@@ -107,11 +111,12 @@ async function seedTenant(t, password) {
   await borrarTenant(t.slug);
   const r = await provision.crearTenant({
     slug: t.slug,
-    nombre: `Concesionaria ${t.marca}`,
+    nombre: t.nombre,
     plan: 'pro',
-    dominios: [`${t.slug}.localhost`],
+    // Dominio propio simulado (el subdominio <slug>.localhost no hace falta cargarlo)
+    dominios: [`crm.${t.slug}.test`],
     modulos: t.modulos,
-    branding: { nombre: `Concesionaria ${t.marca}`, color_primario: t.color },
+    branding: { nombre: t.nombre, color_primario: t.color },
     config: {
       timezone: t.tz, pais: 'Argentina', prefijo_telefonico: '54', moneda: 'ARS',
       marcas: t.marcas, marca_default: t.marcas[0],
@@ -138,6 +143,9 @@ async function seed({ slugs = null } = {}) {
 
   await createControlDatabase();
   await ensureControlSchema();
+  if (!slugs) {
+    for (const slug of ANTERIORES) await borrarTenant(slug);
+  }
   for (const t of TENANTS) {
     if (!slugs || slugs.includes(t.slug)) await seedTenant(t, password);
   }
@@ -147,7 +155,7 @@ module.exports = { seed, borrarTenant, TENANTS };
 
 if (require.main === module) {
   seed()
-    .then(() => console.log('\nLogin: owner@demo.test (o gerente/super/vend1/vend2) con DEV_TENANT_PASSWORD, header X-Tenant: tenant-a | tenant-b'))
+    .then(() => console.log('\nLogin: owner@demo.test (o gerente/super/vend1/vend2) con DEV_TENANT_PASSWORD, header X-Tenant: demo-norte | demo-sur'))
     .catch((e) => { console.error('❌', e.message); process.exitCode = 1; })
     .finally(() => closeControlPool());
 }

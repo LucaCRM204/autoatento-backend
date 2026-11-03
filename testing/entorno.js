@@ -3,11 +3,11 @@
  *
  * Cada corrida usa su propio espacio en la base de desarrollo:
  *   schemas  crm_test_<run>_a, crm_test_<run>_b
- *   tenants  test-<run>-a, test-<run>-b   (dominios test-<run>-a.localhost, ...)
+ *   tenants  test-<run>-a, test-<run>-b   (dominio propio crm.test-<run>-a.test, ...)
  *   superadmin test-<run>@autoatento.test
  * y lo borra al terminar. Al arrancar también borra restos de corridas
  * anteriores que se hayan cortado (crm_test_* / test-*). Nunca toca otros
- * schemas ni tenants (tenant-a / tenant-b de dev:seed quedan intactos).
+ * schemas ni tenants (demo-norte / demo-sur de dev:seed quedan intactos).
  *
  * No va dentro de test/ para que `node --test` no lo tome como archivo de tests.
  */
@@ -80,7 +80,7 @@ async function crearTenant(sufijo, { modulos = {}, tz = 'America/Argentina/Bueno
   const keys = { 'whatsapp-bot': crypto.randomBytes(16).toString('hex'), 'sheet-emanuel': crypto.randomBytes(16).toString('hex') };
   const r = await provision.crearTenant({
     slug, nombre: `Test ${marca}`, plan: 'pro', dbUrl, migrar: true,
-    dominios: [`${slug}.localhost`],
+    dominios: [`crm.${slug}.test`], // dominio propio simulado (<slug>.localhost resuelve solo)
     modulos,
     branding: { nombre: `Concesionaria ${marca}` },
     config: { timezone: tz, marcas: ['fiat'], marca_default: 'fiat', wa_bot_url: 'http://127.0.0.1:9/bot', lead_api_keys: keys },

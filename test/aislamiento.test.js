@@ -18,6 +18,7 @@ const { levantarServer } = require('../scripts/lib/test-server');
 const { listMigrations } = require('../tenancy/migrate');
 
 let srv;
+const BASE = 'autoatento.test'; // BASE_DOMAIN del server de prueba
 let A; // tenant con todos los módulos
 let B; // tenant con el módulo metas apagado
 const tok = {}; // tokens: tok.A, tok.B, tok.vendA, ...
@@ -57,6 +58,7 @@ before(async () => {
     SUSPENSION_WATCH_MS: '1500',
     TENANT_CACHE_TTL_MS: '500',
     AGENT_DISABLED: '0',
+    BASE_DOMAIN: BASE,
   });
   tok.A = (await login(A)).token;
   tok.B = (await login(B)).token;
@@ -91,6 +93,28 @@ describe('resolución de tenant', () => {
     const s = txt(r);
     for (const k of Object.values(A.keys)) assert.ok(!s.includes(k), 'no expone lead_api_keys');
     assert.ok(!/mysql:|v1:|wa_bot_key|password/i.test(s), s);
+  });
+});
+
+describe('subdominios automáticos (BASE_DOMAIN)', () => {
+  const porHost = (host) => api().get('/api/public/tenant').query({ host });
+  it('<slug>.BASE_DOMAIN resuelve el tenant sin cargarlo en dominios', async () => {
+    const r = await porHost(`${A.slug}.${BASE}`);
+    assert.equal(r.status, 200, txt(r));
+    assert.equal(r.body.slug, A.slug);
+    assert.equal((await porHost(`${B.slug}.${BASE.toUpperCase()}:443`)).body.slug, B.slug);
+  });
+  it('el dominio propio del cliente sigue funcionando', async () => {
+    assert.equal((await porHost(`crm.${A.slug}.test`)).body.slug, A.slug);
+    assert.equal((await porHost(`www.crm.${B.slug}.test`)).body.slug, B.slug);
+  });
+  it('<slug>.localhost en desarrollo', async () => {
+    assert.equal((await porHost(`${A.slug}.localhost`)).body.slug, A.slug);
+  });
+  it('dominio base, reservados, dos niveles o slug inexistente -> 404', async () => {
+    for (const host of [BASE, `www.${BASE}`, `app.${BASE}`, `x.${A.slug}.${BASE}`, `${E.PREFIJO}nada.${BASE}`, `${A.slug}.otro-dominio.test`]) {
+      assert.equal((await porHost(host)).status, 404, host);
+    }
   });
 });
 
@@ -317,6 +341,32 @@ describe('panel superadmin', () => {
     const s = txt(r);
     assert.ok(s.includes(A.slug) && s.includes(B.slug));
     for (const k of [...Object.values(A.keys), ...Object.values(B.keys)]) assert.ok(!s.includes(k));
+  });
+
+  it('GET /config devuelve el dominio base y los slugs reservados', async () => {
+    const r = await api().get('/api/superadmin/config').set('Authorization', `Bearer ${saToken}`);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.base_domain, BASE);
+    assert.ok(r.body.slugs_reservados.includes('www'));
+    assert.equal((await api().get('/api/superadmin/config')).status, 401);
+  });
+  it('la lista de tenants trae la URL por subdominio', async () => {
+    const r = await api().get('/api/superadmin/tenants').set('Authorization', `Bearer ${saToken}`);
+    assert.equal(r.body.tenants.find((t) => t.slug === A.slug).url, `https://${A.slug}.${BASE}`);
+  });
+  it('alta: el slug tiene que servir como subdominio -> 400', async () => {
+    const alta = { nombre: 'X', owner: { email: 'o@test.local', password: 'una-clave-larga' } };
+    for (const slug of ['Mal_Slug', '-empieza', 'termina-', 'dos--guiones', 'www', 'app', 'a'.repeat(61)]) {
+      const r = await api().post('/api/superadmin/tenants').set('Authorization', `Bearer ${saToken}`).send({ ...alta, slug });
+      assert.equal(r.status, 400, `${slug}: ${txt(r)}`);
+      assert.match(r.body.error, /[Ss]lug/, slug);
+    }
+  });
+  it('alta: un subdominio de BASE_DOMAIN no se carga como dominio propio -> 400', async () => {
+    const r = await api().post('/api/superadmin/tenants').set('Authorization', `Bearer ${saToken}`)
+      .send({ slug: `${E.PREFIJO}nuevo`, nombre: 'X', dominios: [`otro.${BASE}`], owner: { email: 'o@test.local', password: 'una-clave-larga' } });
+    assert.equal(r.status, 400, txt(r));
+    assert.match(r.body.error, /automáticos/);
   });
 
   describe('suspensión', () => {
