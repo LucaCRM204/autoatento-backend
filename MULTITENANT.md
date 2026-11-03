@@ -6,13 +6,13 @@ request corre "dentro" de un tenant y `require('../db')` va al pool de ese
 tenant. Un `WHERE` olvidado no puede filtrar datos entre clientes porque cada
 cliente está en otra base.
 
-> Estado: **Fases 1 a 4 terminadas**:
+> Estado: **Fases 1 a 5 terminadas** (la 5 es documentación: nada se ejecutó en producción):
 > - base multi-tenant del backend;
 > - migraciones, panel superadmin y uso mensual;
 > - frontend único y pantalla `/superadmin`;
 > - tests de aislamiento.
 >
-> Queda el plan de migración de clientes (Fase 5). Cómo correr todo: [README.md](README.md).
+> Fase 5: plan de migración y runbook de producción en la sección 14 (sin ejecutar). Cómo correr todo: [README.md](README.md).
 
 > **Comandos en Windows PowerShell 5.** Cada bloque tiene su variante.
 > - **`npm.cmd`, no `npm`:** en PowerShell 5, `npm run x -- --flag` **pierde los
@@ -539,7 +539,7 @@ Usa `TENANT_DB_KEY_ANTERIOR` como key vieja y `TENANT_DB_KEY` como nueva.
 - `ACCEPTANCE_CHECK_MS=2000`: el checker de aceptación corre cada 2 s en vez de 30 s;
 - (ya no hace falta `TZ`: ver "Fechas y zonas horarias" más abajo).
 
-**Qué cubre (51 tests):**
+**Qué cubre (53 tests):**
 
 | Área | Casos |
 |---|---|
@@ -559,34 +559,291 @@ Usa `TENANT_DB_KEY_ANTERIOR` como key vieja y `TENANT_DB_KEY` como nueva.
 - **Fechas "de calendario" del tenant** (recordatorios, horarios, corte de mes): usan la zona horaria del tenant (`nowInTz`).
 - **Tests:** 53 tests pasan sin `TZ=UTC`, con el proceso en `America/Buenos_Aires`. Hay un test que verifica que una oferta pasada a otro vendedor no siga rotando.
 
-## 14. Migrar un cliente existente
+## 14. Runbook de puesta en producción
 
-*El paso a paso detallado es de la Fase 5.* Cambios de comportamiento que hay
-que **avisar al cliente** (Fiat primero) cuando se migre:
+> **Nada de esto se ejecutó.** Son los pasos para hacerlo vos.
+>
+> **Convenciones:**
+> - Los comandos son de **PowerShell 5**: `npm.cmd`, `$env:VAR`, y `--result-file` en vez de `>`.
+> - Los comandos que van **dentro del contenedor de Railway** (`railway ssh`) son de `sh` (Linux).
+> - `<...>` es un valor tuyo.
+> - Nunca pegues secretos en archivos versionados ni en chats.
 
-1. **Re-login obligatorio una vez:** los tokens viejos no tienen `tid` y reciben 401.
-2. **Horario del flujo de aceptación de leads:** `isWorkingHours()` (9:30 a
-   19:30, lunes a viernes) antes usaba la hora del servidor. En Railway el
-   servidor está en UTC, así que el horario efectivo era 6:30 a 16:30 de
-   Argentina. Ahora usa la zona horaria del tenant: la ventana pasa a ser
-   9:30 a 19:30 de Argentina.
-3. **URLs de webhooks:** pasan a `/api/t/<slug>/webhooks/...`. Esto incluye
-   Google Sheets, Zapier y la URL a la que el bot manda leads. Las API keys
-   actuales (`LEAD_API_KEYS` del deploy viejo) se cargan en `lead_api_keys` y siguen sirviendo.
-4. **Bot de WhatsApp:** `wa_bot_url` y `wa_bot_key` se cargan en la config del
-   tenant. Ya no hay default al bot de Fiat, ni `VITE_WHATSAPP_BOT_URL` en el front.
-5. **Marcas:** cargar `marcas: ["fiat"]` y `marca_default: "fiat"`. Sin eso, los
-   leads nuevos de webhooks quedan con marca vacía.
-6. **`DIST_EXCLUIDOS`** pasa a `config.dist_excluidos`.
-7. **`AGENT_MCP_KEY`** pasa a `config.agent_mcp_key`, y la URL del MCP pasa a `/api/t/<slug>/mcp`.
-8. **`/api/calls`, `/api/metas` y `/api/users`** piden token.
-9. **Cookie de sesión:** pasa a llamarse `session_<slug>`. El front usa el token del header, así que no debería notarse.
-10. **Migraciones sobre la base de Fiat:**
-    - `000` a `002` no cambian nada: las tablas y la columna ya existen.
-    - `003` pasa `leads.marca` a `VARCHAR(30)` y reconstruye `leads`: **correrla fuera de horario**.
-    - `004` agrega `user_logins`.
-    - Se puede registrar el tenant sin migrar y correr el dry-run antes.
-11. **Front:** el dominio `crm5alluma.com.ar` pasa al proyecto único de Vercel (sección 7), y el branding se carga en el panel.
+### 14.1 Repos privados en GitHub
+
+Creá vos dos repos **privados y vacíos** (sin README ni .gitignore): `autoatento-backend` y `autoatento-frontend`. Después, en PowerShell:
+
+```powershell
+cd C:\Users\lucac\Downloads\autoatento\autoatento-backend
+git status                       # tiene que estar limpio
+git remote add origin https://github.com/<usuario-u-org>/autoatento-backend.git
+git push -u origin main
+
+cd ..\autoatento-frontend
+git status
+git remote add origin https://github.com/<usuario-u-org>/autoatento-frontend.git
+git push -u origin main
+```
+
+Antes de pushear, confirmá que no sube nada sensible (no tiene que listar nada):
+
+```powershell
+git ls-files | Select-String -Pattern '(^|/)\.env($|\.(?!example$))|\.sql\.gz$|\.dump$|auth_info'
+```
+
+`.env.example` sí está versionado: es la plantilla, sin valores.
+
+### 14.2 Railway: backend + MySQL de control
+
+**Proyecto nuevo** (separado del de Fiat): *New Project*.
+
+1. ***+ New → Database → MySQL*.** Llamalo `mysql-control`. Va a tener `autoatento_control` y los schemas `crm_<slug>` de los clientes nuevos.
+2. ***+ New → GitHub Repo → autoatento-backend*.** Railway lee `railway.json`:
+   - build con el `Dockerfile` (Node 22);
+   - `npm start`;
+   - healthcheck `GET /api/health`;
+   - reinicio si falla;
+   - **1 réplica** (los sockets, la presencia y el worker del agente viven en memoria; para más réplicas haría falta un adapter de Redis para Socket.io).
+3. **Variables** del servicio backend (*Variables → Raw Editor*):
+
+| Variable | Valor | Nota |
+|---|---|---|
+| `NODE_ENV` | `production` | |
+| `CONTROL_DB_URL` | `mysql://${{mysql-control.MYSQLUSER}}:${{mysql-control.MYSQLPASSWORD}}@${{mysql-control.MYSQLHOST}}:${{mysql-control.MYSQLPORT}}/autoatento_control` | Red privada de Railway. La base se crea sola en el primer arranque |
+| `TENANT_DB_SERVER_URL` | `mysql://${{mysql-control.MYSQLUSER}}:${{mysql-control.MYSQLPASSWORD}}@${{mysql-control.MYSQLHOST}}:${{mysql-control.MYSQLPORT}}/` | Donde se crean los `crm_<slug>` nuevos |
+| `TENANT_DB_KEY` | 64 hex nuevos | **Guardarla antes en el gestor de contraseñas** (sección 12) |
+| `JWT_SECRET` | secreto nuevo, largo | **No reusar** el del backend viejo de Fiat |
+| `SUPERADMIN_JWT_SECRET` | otro secreto nuevo | Distinto de `JWT_SECRET` |
+| `OPENAI_API_KEY` | la key de OpenAI | Key global del Agente IA (cada tenant puede tener la suya) |
+| `JWT_EXPIRES_IN` | `7d` | Opcional |
+| `AUTO_MIGRATE` | `0` | Las migraciones de clientes con datos se corren a mano (14.4) |
+
+   Opcionales: `AGENT_PROVIDER`, `AGENT_MODEL`, `ANTHROPIC_API_KEY`, `AGENT_CONCURRENCY`, `TENANT_POOL_LIMIT`, `TENANT_CACHE_TTL_MS`.
+
+   **No cargar en producción:**
+   - `PORT` (lo pone Railway);
+   - `DEV_MYSQL_URL` y `DEV_TENANT_PASSWORD`;
+   - `TZ` (ya no hace falta);
+   - `WA_BOT_URL`, `WA_BOT_KEY`, `LEAD_API_KEYS`, `AGENT_MCP_KEY`, `DIST_EXCLUIDOS`, `DATABASE_URL` y `DB_*` (todo eso va por tenant);
+   - `TENANTS_SOLO_PREFIJO` y `ACCEPTANCE_CHECK_MS` (solo tests);
+   - `AGENT_DISABLED`;
+   - `TENANT_DB_KEY_ANTERIOR` (solo durante una rotación).
+
+   Generar secretos en PowerShell (uno por vez, y pegarlos directo en Railway y en el gestor):
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"   # TENANT_DB_KEY
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"   # JWT_SECRET / SUPERADMIN_JWT_SECRET
+```
+
+4. **Dominio del backend.** En *Settings → Networking*, *Generate Domain* o un dominio propio (ej. `api.autoatento.com`, con el `CNAME` que indique Railway).
+5. **Primer deploy y verificación.**
+   - Los logs tienen que mostrar `Base de control "autoatento_control" creada` y `Base de control OK`.
+   - La prueba:
+
+```powershell
+Invoke-RestMethod https://<backend>/api/health    # { ok: True, ts: ... }
+```
+
+6. **Superadmin.** Se crea dentro del contenedor, así no hace falta exponer la base. Con la CLI de Railway (v4 o más nueva):
+
+```powershell
+npm.cmd install -g @railway/cli
+railway login
+cd C:\Users\lucac\Downloads\autoatento\autoatento-backend
+railway link            # elegir el proyecto y el servicio del backend
+railway ssh             # abre una shell (sh) dentro del contenedor
+```
+```sh
+# dentro del contenedor:
+SUPERADMIN_PASSWORD='<contraseña de 12+ caracteres>' npm run superadmin:add -- --email <vos@autoatento.com> --nombre "Luca"
+exit
+```
+
+   **Alternativa sin `railway ssh`:** correrlo desde tu PC contra la URL **pública** de `mysql-control` (*Variables → MYSQL_PUBLIC_URL*), en una ventana nueva de PowerShell:
+
+```powershell
+$env:CONTROL_DB_URL = '<MYSQL_PUBLIC_URL de mysql-control, cambiando /railway por /autoatento_control>'
+$env:SUPERADMIN_PASSWORD = '<contraseña>'
+npm.cmd run superadmin:add -- --email <vos@autoatento.com> --nombre "Luca"
+Remove-Item Env:CONTROL_DB_URL, Env:SUPERADMIN_PASSWORD
+```
+
+### 14.3 Vercel: un proyecto para el front
+
+1. ***Add New → Project* → `autoatento-frontend`.** Framework Vite, build `npm run build`, output `dist`. `vercel.json` ya tiene el rewrite SPA.
+2. **Variables** (*Production* y *Preview*):
+   - `VITE_API_URL=https://<backend>/api`.
+   - Nada más; **no** cargar `VITE_DEV_TENANT`.
+3. **Deploy.** Agregar el dominio del panel (ej. `panel.autoatento.com`) y entrar a `https://panel.autoatento.com/superadmin` con el superadmin.
+4. **Dominios de clientes:** ver la sección 7.
+   - En Vercel: *Settings → Domains → Add*.
+   - DNS del cliente: `A` a la IP que indique Vercel para un dominio raíz, o `CNAME` a `cname.vercel-dns.com` para un subdominio.
+   - En el panel: el mismo host en *General → Dominios*.
+5. **Prueba de punta a punta con un tenant demo** (recomendado antes del Día D):
+   1. En el panel, *Nuevo tenant → Base nueva*: `demo`, dominio `demo.autoatento.com`.
+   2. Agregar ese dominio en Vercel.
+   3. Entrar con el owner y probar login, alta de lead, sockets y "entrar como owner".
+
+### 14.4 Día D de Fiat
+
+**Idea general:** el backend nuevo apunta a **la misma MySQL de Fiat** (base existente). Durante la transición, el backend viejo y el nuevo usan la misma base, así que **no se pierde nada si hay que volver**.
+
+Está probado que el backend viejo funciona igual con la base ya migrada: login, lecturas, alta de lead, webhook viejo y completar recordatorio, 15 de 15 contra una base con las migraciones 000 a 005.
+
+#### Preparación (días antes, sin tocar la producción de Fiat salvo lecturas)
+
+1. **Inventario del deploy viejo.**
+   - **Backend de Fiat en Railway** (*Variables*): anotar `LEAD_API_KEYS` (formato `proveedor:clave;proveedor2:clave2`), `WA_BOT_URL`, `WA_BOT_KEY`, `DIST_EXCLUIDOS` y `AGENT_MCP_KEY`.
+   - **Front viejo:** `VITE_WHATSAPP_BOT_URL`.
+   - **Bot (droplet):** la variable del `.env` con la URL del webhook del CRM (la que termina en `/api/webhooks/whatsapp-bot`) y la key que manda.
+   - **Integraciones:** la lista de Google Sheets (Apps Script) y Zaps que mandan leads.
+2. **URL de la MySQL de Fiat.** En el proyecto viejo, servicio MySQL → *Variables → `MYSQL_PUBLIC_URL`* (el backend nuevo está en otro proyecto y entra por el proxy público).
+   - Tiene costo de egress y algo más de latencia. Más adelante se puede mover la base al proyecto nuevo.
+3. **Comparar esquema** (solo lectura) y revisar el informe:
+
+```powershell
+cd C:\Users\lucac\Downloads\autoatento\autoatento-backend
+npm.cmd run comparar-esquema -- --clon '<MYSQL_PUBLIC_URL de Fiat>' --referencia demo --salida fiat-vs-autoatento.md
+```
+
+   Se espera que le falten `schema_migrations` y `user_logins`, y quizás `recordatorios.completed_at` (las agregan las migraciones), y que `leads.marca` sea ENUM (lo cambia la 003). Cualquier otra diferencia: revisarla antes del Día D. **No subas `fiat-vs-autoatento.md` al repo.**
+
+4. **Registrar el tenant** en el panel: *Nuevo tenant → Base existente*.
+   - slug `fiat-autodelsol`, nombre `Auto del Sol Fiat`, plan, zona `America/Argentina/Buenos_Aires`;
+   - dominios: `crm5alluma.com.ar` y uno de prueba, ej. `fiat.autoatento.com`;
+   - marcas `fiat`;
+   - URL del bot = `WA_BOT_URL` viejo (o `https://api.crmalluma.com.ar/wa-fiat`);
+   - connection string = `MYSQL_PUBLIC_URL` de Fiat;
+   - **destildar "Correr las migraciones ahora"**;
+   - sin owner (ya existe en la base);
+   - branding: el que quieras mostrar (el front viejo decía "Alluma").
+5. **Suspenderlo enseguida** (*Resumen → Suspender*, motivo "pre-migración"). Así el backend nuevo no corre tareas en segundo plano sobre la base de Fiat antes de tiempo.
+6. **Secretos** en *Secretos*:
+   - `wa_bot_key` = `WA_BOT_KEY` viejo;
+   - API keys de webhooks: una fila por cada `proveedor:clave` de `LEAD_API_KEYS` (**las mismas claves**: los Sheets no cambian de key);
+   - key del MCP, si se usa.
+
+   En *Configuración*: `dist_excluidos` = `DIST_EXCLUIDOS` viejo.
+7. **Ver pendientes** en *Base y migraciones*. Lo esperado: `000` a `002` sin cambios; `003`, `004` y quizás `005`.
+8. **Avisar a los usuarios:** la ventana del Día D, que van a tener que volver a iniciar sesión, y que el horario de ofertas de leads pasa a ser 9:30 a 19:30 de Argentina (aunque ese flujo hoy está apagado).
+
+#### Día D (fuera de horario, ej. 22:00, alrededor de 1 hora)
+
+1. **Backup de la base de Fiat** (obligatorio). Las dos opciones:
+   - **Desde Railway:** servicio MySQL de Fiat → *Backups* (en el volumen) → *Create backup*, si el plan lo tiene.
+   - **`mysqldump` desde tu PC** (cliente de MySQL 8, por ejemplo `winget install Oracle.MySQL` o el MySQL Shell). En PowerShell **no uses `>`**, porque guarda en UTF-16: usá `--result-file`.
+
+```powershell
+$fecha = Get-Date -Format 'yyyyMMdd-HHmm'
+mysqldump --host=<host del proxy> --port=<puerto> --user=root --password `
+  --single-transaction --routines --triggers --no-tablespaces --set-gtid-purged=OFF `
+  --default-character-set=utf8mb4 --result-file="C:\backups\fiat-$fecha.sql" railway
+# Verificar que tenga datos:
+(Get-Item "C:\backups\fiat-$fecha.sql").Length / 1MB
+Select-String -Path "C:\backups\fiat-$fecha.sql" -Pattern 'INSERT INTO `leads`' -SimpleMatch | Measure-Object
+```
+
+   (`railway` es el nombre de la base en la URL; puede ser otro.) Guardar el `.sql` fuera del repo.
+
+2. **Migraciones:** en el panel, *Base y migraciones → Aplicar pendientes*. La `003` reconstruye `leads`: unos segundos o minutos según el tamaño. Alternativa, dentro del contenedor:
+
+```sh
+npm run migrate -- --tenant fiat-autodelsol --incluir-suspendidos --dry-run
+npm run migrate -- --tenant fiat-autodelsol --incluir-suspendidos
+```
+
+3. **Backend viejo:** en su servicio de Railway, agregar `AGENT_DISABLED=1` y redeploy. Así el Agente IA (y el aviso de recordatorios vencidos) corre solo en el backend nuevo.
+   - El viejo sigue atendiendo al front viejo mientras dure el cambio de dominio.
+   - Sus otras tareas en segundo plano son inofensivas en paralelo: el reparto es idempotente y el checker no tiene ofertas.
+4. **Reactivar `fiat-autodelsol`** en el panel. Desde acá, el backend nuevo procesa a Fiat.
+5. **Prueba en el dominio de prueba** `https://fiat.autoatento.com` (agregado en Vercel): login como owner, ver los leads de siempre, *Mi Equipo*, chat de WhatsApp de un lead, alertas. "Entrar como owner" desde el panel también abre ese dominio.
+6. **Apuntar `crm5alluma.com.ar` al proyecto nuevo de Vercel:**
+   - **Si el proyecto viejo está en la misma cuenta o equipo de Vercel:** *proyecto viejo → Settings → Domains → Remove `crm5alluma.com.ar`*, y después *proyecto nuevo → Domains → Add `crm5alluma.com.ar`*. Si el DNS ya apunta a Vercel, no hay que tocar DNS y el cambio es inmediato.
+   - **Si está en otra cuenta:** Vercel pide verificarlo con un registro TXT; después cambiar el DNS a lo que indique.
+7. **Webhooks** (la key no cambia, solo la URL):
+   - **Google Sheets** (cada Apps Script): `https://<backend>/api/t/fiat-autodelsol/webhooks/sheets`.
+   - **Zapier:** `https://<backend>/api/t/fiat-autodelsol/webhooks/zapier-formularios`.
+   - **Bot de WhatsApp** (`.env` del droplet): la URL del webhook del CRM pasa a `https://<backend>/api/t/fiat-autodelsol/webhooks/whatsapp-bot`; después reiniciar el bot (ej. `pm2 restart <bot-fiat>`). El bot sigue escribiendo en la misma base, sin cambios.
+   - Mientras no se cambien, las URLs viejas siguen funcionando contra el backend viejo, en la misma base: no se pierden leads.
+8. **Checklist post-migración** (con dos navegadores: owner y un vendedor):
+   - [ ] `https://crm5alluma.com.ar` muestra el branding de Fiat y "Powered by AutoAtento".
+   - [ ] Login de owner, gerente, supervisor y vendedor (todos tienen que volver a loguearse).
+   - [ ] La cantidad de leads coincide con la del sistema viejo (filtros iguales).
+   - [ ] Alta manual de un lead de prueba: le llega en vivo al otro navegador.
+   - [ ] Una fila de prueba en cada Google Sheet crea el lead (y no lo duplica).
+   - [ ] Un WhatsApp de prueba al bot crea el lead; el chat del lead muestra los mensajes y se puede responder desde el CRM.
+   - [ ] Notas, recordatorios (crear y completar), alertas, tareas asignadas y metas.
+   - [ ] *Mi Equipo* muestra la distribución; *Análisis Diario* y Ranking cargan.
+   - [ ] Agente IA: `/api/agent/status` en el panel del agente; acciones pendientes visibles.
+   - [ ] Registrar una llamada desde el panel de llamadas.
+   - [ ] En el panel superadmin: uso del mes de Fiat con usuarios y leads; estado del bot "Responde".
+   - [ ] Logs de Railway del backend nuevo sin `sin tenant en el contexto` ni errores de SQL.
+9. **Semana de respaldo.** El backend viejo (con `AGENT_DISABLED=1`) y el proyecto viejo de Vercel quedan deployados una semana.
+   - Si todo anda: escalar el backend viejo a 0 réplicas (no borrarlo enseguida) y archivar el proyecto viejo de Vercel.
+   - **No borrar el servicio MySQL de Fiat del proyecto viejo:** es la base que usa el backend nuevo.
+
+#### Rollback (en minutos)
+
+Como los dos backends usan la misma base y el backend viejo funciona con el esquema migrado, **no hace falta revertir la base**: lo que se cargó en el sistema nuevo queda.
+
+1. **Front (1 a 2 minutos):** en Vercel, *proyecto nuevo → Domains → Remove `crm5alluma.com.ar`*, y en el *proyecto viejo → Add* de nuevo (mismo DNS).
+2. **Tareas en segundo plano:** en el panel, *Suspender* `fiat-autodelsol`; el backend nuevo deja de procesar Fiat. En el backend viejo, sacar `AGENT_DISABLED` y redeploy.
+3. **Webhooks:** volver los Sheets, Zapier y el `.env` del bot a las URLs viejas (`https://<backend-viejo>/api/webhooks/...`) y reiniciar el bot. Las keys son las mismas.
+4. **Usuarios:** vuelven a entrar en el front viejo, con el login viejo.
+5. **Solo si hay datos dañados (último recurso):** restaurar el backup.
+   - **Primero en una base nueva**, para compararla, nunca encima de la de producción sin verificar.
+
+```powershell
+mysql --host=<host> --port=<puerto> --user=root --password -e "CREATE DATABASE fiat_restore"
+mysql --host=<host> --port=<puerto> --user=root --password --default-character-set=utf8mb4 fiat_restore `
+  --execute="source C:/backups/fiat-<fecha>.sql"
+```
+
+   - Después decidir con los datos a la vista. Esto es destructivo: hacerlo con calma.
+
+**Cambios de comportamiento para avisar a Fiat:**
+1. **Re-login obligatorio una vez:** los tokens viejos no tienen `tid`.
+2. **Horario del flujo de ofertas:** pasa a ser 9:30 a 19:30 de Argentina (antes, por la hora del servidor, era 6:30 a 16:30). El flujo hoy está apagado.
+3. **URLs de webhooks:** pasan a `/api/t/fiat-autodelsol/...`. Las keys son las mismas.
+4. **Ya no hay defaults hardcodeados:** la URL del bot, las marcas (`fiat`) y los usuarios excluidos del reparto salen de la config del tenant.
+5. **`/api/calls`, `/api/metas` y `/api/users`** piden token (el front nuevo lo manda).
+6. **Cookie de sesión:** se llama `session_fiat-autodelsol`.
+
+### 14.5 Checklist para migrar otro clon (GoldPlan, Peugeot, Pergamino, ALRA)
+
+Para cada clon, antes de registrarlo:
+
+**Base de datos (automático, solo lectura):**
+
+```powershell
+npm.cmd run comparar-esquema -- --clon '<MYSQL_PUBLIC_URL del clon>' --referencia demo --salida <clon>-vs-autoatento.md
+```
+
+| Lo que aparece en el informe | Qué hacer |
+|---|---|
+| Tablas que le faltan al clon | Nada: las crean las migraciones al registrarlo |
+| Columnas que le faltan al clon | Confirmar que alguna migración las agrega; si no, migración nueva aditiva (patrón de `002`/`005`) |
+| Tablas o columnas que solo tiene el clon | Funcionalidad propia: ¿se suma para todos (migración) o es un módulo (flag + migración + rutas con `requireModulo`)? Ej.: tablas de scoring → módulo `scoring` |
+| Tipos distintos (ENUM con otros valores) | Migración que unifique el tipo, como la `003` |
+| Estados, fuentes o roles en uso que el CRM base no conoce | Estados y fuentes en el front (`CRM.tsx`) o como config del tenant; nunca hardcodeados a un cliente |
+| Marcas en uso | Cargar `config.marcas` y `marca_default` del tenant |
+
+**Código (manual, comparando el repo del clon contra `fiat-autodelsol-crm-backend`/`-react` en el commit desde el que se copió AutoAtento):**
+- [ ] `git diff --stat` de `routes/`, `services/`, `agent/` y `socket-server.js`: cada archivo distinto, ¿es mejora general (se porta a AutoAtento para todos) o del cliente (módulo)?
+- [ ] Rutas que existen solo en el clon → módulo o ruta nueva.
+- [ ] `CRM.tsx`: secciones del menú, botones y textos propios (marca, plantillas de WhatsApp, modelos) → módulos y branding, nunca hardcodeado.
+- [ ] Variables de entorno del deploy del clon que no existen en AutoAtento → config del tenant (o secreto cifrado) o variable global.
+- [ ] Webhooks y fuentes (`FUENTE_POR_PROVIDER`, `LEAD_API_KEYS`) → `sheet_fuentes` y `lead_api_keys` del tenant.
+- [ ] Bot de WhatsApp del clon: ¿misma API que el de Fiat? (`WhatsApp Admin` muestra los modelos de Fiat; revisar.)
+- [ ] Roles y jerarquía (equipos, `reportsTo`, ids de líderes hardcodeados como los de GoldPlan) → datos, no código.
+- [ ] `multi_marca`, `motos` y `scoring`: se definen al migrar **GoldPlan** (qué pantallas y reglas activa cada uno).
+
+**Después de convertir las diferencias en migraciones y módulos:**
+1. `npm test`, `smoke` y `smoke:fase2` en desarrollo.
+2. Deploy.
+3. Registrar el clon como **base existente, sin migrar y suspendido**.
+4. Seguir el Día D (14.4) cambiando dominio, webhooks y bot.
 
 ## 15. Bot de WhatsApp (fuera de alcance)
 
@@ -625,6 +882,5 @@ Para pasar a un bot multi-tenant haría falta:
 
 ## 17. Pendiente
 
-- **Fase 5:** plan de migración de Fiat y checklist para comparar los otros clones.
 - **`multi_marca`, `motos` y `scoring`:** los flags existen, pero el CRM base no tiene pantallas para eso (por ejemplo, un selector de marca al cargar un lead). **Decisión: se definen cuando se migre GoldPlan.**
 - **Admin del bot por tenant** (sección 14).

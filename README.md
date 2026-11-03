@@ -16,8 +16,7 @@ Repos: `autoatento-backend` (este) y `autoatento-frontend`.
 - `.env` armado a partir de `.env.example`. En desarrollo alcanza con:
   - `DEV_MYSQL_URL`;
   - `TENANT_DB_KEY`, `JWT_SECRET` y `SUPERADMIN_JWT_SECRET`;
-  - `DEV_TENANT_PASSWORD`;
-  - `TZ=UTC`.
+  - `DEV_TENANT_PASSWORD`.
 
 ## Backend
 
@@ -69,11 +68,17 @@ VITE_DEV_TENANT=tenant-a
 
 Chequeo de tipos y build: `npm run build` (o `npm.cmd run build`).
 
+## Producción y migración de clientes
+
+- **Deploy** (GitHub, Railway y Vercel), **Día D de Fiat** con rollback, y checklist para migrar otros clones: [MULTITENANT.md, sección 14](MULTITENANT.md).
+- **Comparar el esquema de otro clon** (solo lectura): `npm.cmd run comparar-esquema -- --clon '<mysql://...>' --referencia <slug> --salida informe.md`.
+- **Archivos de Railway:** `railway.json` (Dockerfile, healthcheck `/api/health`, 1 réplica) y `Dockerfile` (Node 22).
+
 ## Tests
 
 | bash | PowerShell 5 | Qué prueba | Duración |
 |---|---|---|---|
-| `npm test` | `npm.cmd test` | **Tests de aislamiento** (node:test + supertest, 51 tests) | ~1,5 min |
+| `npm test` | `npm.cmd test` | **Tests de aislamiento** (node:test + supertest, 53 tests) | ~1,5 min |
 | `npm run smoke` | `npm.cmd run smoke` | Smoke de la Fase 1 (53 checks). Correrlo después de `dev:seed` | ~1 min |
 | `npm run smoke:fase2` | `npm.cmd run smoke:fase2` | Smoke de la Fase 2 (50 checks). Al final deja todo como `dev:seed` | ~2 min |
 

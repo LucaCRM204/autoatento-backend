@@ -1,0 +1,13 @@
+node_modules
+.env
+.env.*
+!.env.example
+.git
+uploads
+test
+testing
+*.log
+dumps
+backups
+*.sql.gz
+*.dump

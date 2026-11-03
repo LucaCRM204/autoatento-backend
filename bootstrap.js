@@ -7,19 +7,23 @@
 //     tenants activos. Un tenant que falla no frena el arranque ni a los demás.
 // Los tenants nuevos se crean desde el panel superadmin o con `npm run tenant:add`
 // (schema + migraciones + owner).
-const { ensureControlSchema } = require('./tenancy/control');
+const { ensureControlSchema, createControlDatabase } = require('./tenancy/control');
 const { migrateTenants } = require('./tenancy/migrate');
 
 async function bootstrap() {
   try {
-    await ensureControlSchema();
+    try {
+      await ensureControlSchema();
+    } catch (e) {
+      if (e.code !== 'ER_BAD_DB_ERROR') throw e;
+      // Primer arranque en un servidor nuevo: crear la base de control
+      const nombre = await createControlDatabase();
+      console.log(`🗄️  Base de control "${nombre}" creada`);
+      await ensureControlSchema();
+    }
     console.log('🗄️  Base de control OK');
   } catch (e) {
-    if (e.code === 'ER_BAD_DB_ERROR') {
-      console.error('❌ Bootstrap: la base de control no existe. Corré `npm run control:init`.');
-    } else {
-      console.error('❌ Bootstrap (base de control):', e.message);
-    }
+    console.error('❌ Bootstrap (base de control):', e.code || '', e.message);
     return;
   }
 
