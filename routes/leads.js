@@ -29,6 +29,7 @@ const FIELD_LABELS = {
   assigned_to: 'Vendedor', equipo: 'Equipo', fecha: 'Fecha'
 };
 const { getAssignedVendorByBrand, getRoundRobinStatus, resetRoundRobinIndex } = require('../utils/assign');
+const { emitTenant } = require('../tenancy/realtime');
 
 // Importar funciones del socket server
 let socketFunctions = null;
@@ -445,7 +446,7 @@ router.post('/', authenticateToken, async (req, res) => {
           timestamp: new Date().toISOString()
         });
 
-        io.emit('lead:assigned', {
+        emitTenant('lead:assigned', {
           lead: lead,
           vendedorId: assignedTo,
           timestamp: new Date().toISOString()
@@ -516,12 +517,12 @@ router.post('/:id/accept', authenticateToken, async (req, res) => {
 
     // Notificar a todos
     if (io) {
-      io.emit('lead:assigned', {
+      emitTenant('lead:assigned', {
         lead: updatedLead,
         vendedorId: userId,
         timestamp: new Date().toISOString()
       });
-      io.emit('lead:changed', updatedLead);
+      emitTenant('lead:changed', updatedLead);
     }
 
     console.log(`✅ Lead ${id} aceptado por vendedor ${userId}`);
@@ -844,7 +845,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
     // Avisar a supervisores/gerentes conectados para que vean el cambio sin recargar
     try {
       const io = req.app.get('io');
-      if (io) io.emit('lead:updated', mapLead(afterLead));
+      if (io) emitTenant('lead:updated', mapLead(afterLead));
     } catch (e) { }
 
     console.log(`✅ Lead ${id} actualizado. Estado: ${afterLead.estado}`);

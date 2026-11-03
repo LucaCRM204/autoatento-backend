@@ -13,6 +13,7 @@
  */
 const router = require('express').Router();
 const pool = require('../db');
+const { emitTenant } = require('../tenancy/realtime');
 const { authenticateToken } = require('../middleware/auth');
 
 const TIPOS = ['llamar', 'whatsapp', 'email', 'cotizar', 'seguimiento', 'recuperar_perdido'];
@@ -37,7 +38,7 @@ async function avisar(req, userId, message, leadId, relatedId) {
       'INSERT INTO alertas (user_id, type, message, lead_id, related_id, timestamp) VALUES (?, ?, ?, ?, ?, NOW())',
       [userId, 'tarea', message.slice(0, 500), leadId, relatedId]);
     const io = req.app.get('io');
-    if (io) io.emit('notification', {
+    if (io) emitTenant('notification', {
       id: `tarea-${relatedId}-${Date.now()}`, type: 'alert', title: '📋 Tarea', message,
       timestamp: new Date().toISOString(), read: false, severity: 'info', leadId, targetUserId: userId,
     });

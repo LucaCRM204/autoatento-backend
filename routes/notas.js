@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const { emitTenant } = require('../tenancy/realtime');
 
 // ========================================
 // NOTAS INTERNAS - Comentarios privados por lead
@@ -77,7 +78,7 @@ router.post('/leads/:leadId/notas', authenticateToken, async (req, res) => {
     // Tiempo real para supervisores/gerentes
     try {
       const io = req.app.get('io');
-      if (io) io.emit('nota:created', { leadId: Number(leadId), nota: nuevaNota[0] });
+      if (io) emitTenant('nota:created', { leadId: Number(leadId), nota: nuevaNota[0] });
     } catch (e) { }
 
     res.json({ ok: true, nota: nuevaNota[0] });

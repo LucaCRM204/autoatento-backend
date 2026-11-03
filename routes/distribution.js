@@ -33,6 +33,7 @@ const router = express.Router();
 const dist = require('../services/distribucion.service');
 const pool = require('../db');
 const { authenticateToken, requireRole } = require('../middleware/auth');
+const { emitTenant } = require('../tenancy/realtime');
 
 // Roles que pueden ver y tocar la distribución.
 const ROLES_ADMIN = ['owner', 'director', 'gerente', 'supervisor'];
@@ -41,7 +42,7 @@ const soloAdmins = requireRole(ROLES_ADMIN);
 function emitir(req, evento, payload) {
   try {
     const io = req.app.get('io');
-    if (io) io.emit(evento, payload);
+    if (io) emitTenant(evento, payload);
   } catch (_) { /* no romper la respuesta por un socket caído */ }
 }
 

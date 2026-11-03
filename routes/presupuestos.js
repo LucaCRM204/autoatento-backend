@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const { rebindTenant } = require('../tenancy/middleware');
 const fs = require('fs');
 const multer = require('multer');
 const path = require('path');
@@ -228,7 +229,7 @@ router.post('/generar-pdf', authenticateToken, upload.fields([
   { name: 'imagen2', maxCount: 1 },
   { name: 'imagen3', maxCount: 1 },
   { name: 'imagenCotizador', maxCount: 1 }
-]), async (req, res) => {
+]), rebindTenant, async (req, res) => { // multer (streams) puede perder el contexto del tenant
   const uploadedFiles = [];
 
   try {

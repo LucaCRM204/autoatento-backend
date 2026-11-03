@@ -18,6 +18,7 @@
  */
 
 const pool = require('../db');
+const { tenantConfig } = require('../tenancy/settings');
 
 const TOTAL = 100;
 const ROL_VENDEDOR = 'vendedor';
@@ -31,14 +32,14 @@ const scopeDe = (equipoId) => `lider:${equipoId}`;
 
 // IDs que nunca deben recibir leads (contenedores, usuarios basura).
 // La lista vieja era la de GoldPlan y en Auto del Sol pisaba usuarios
-// reales (ej: el 13 es un vendedor). Ahora se configura por .env:
-//   DIST_EXCLUIDOS=198,380
-const EXCLUIDOS = new Set(
-  String(process.env.DIST_EXCLUIDOS || '')
-    .split(',')
-    .map((x) => parseInt(x.trim(), 10))
-    .filter(Number.isInteger)
-);
+// reales (ej: el 13 es un vendedor). Son ids de la base de cada tenant, así
+// que se configuran por tenant: tenants.config.dist_excluidos = [198, 380]
+// (o "198,380"). Fallback: DIST_EXCLUIDOS=198,380 en el .env.
+function excluidos() {
+  const v = tenantConfig('dist_excluidos', 'DIST_EXCLUIDOS', '');
+  const lista = Array.isArray(v) ? v : String(v || '').split(',');
+  return new Set(lista.map((x) => parseInt(String(x).trim(), 10)).filter(Number.isInteger));
+}
 
 // ─────────────────────────────────────────────────────────────
 // Helpers puros (testeables sin base)
@@ -223,7 +224,8 @@ async function getVendedoresDeEquipo(equipoId, conn = pool) {
       ORDER BY u.id`,
     [equipoId, ROL_VENDEDOR]
   );
-  return rows.filter((v) => !EXCLUIDOS.has(v.id));
+  const fuera = excluidos();
+  return rows.filter((v) => !fuera.has(v.id));
 }
 
 /**
@@ -565,7 +567,8 @@ async function idsHabilitados(scope) {
       WHERE d.scope = ? AND d.activo = 1 AND d.pausado = 0 AND u.active = 1`,
     [scope]
   );
-  return rows.map((r) => r.user_id).filter((id) => !EXCLUIDOS.has(id));
+  const fuera = excluidos();
+  return rows.map((r) => r.user_id).filter((id) => !fuera.has(id));
 }
 
 /**
@@ -654,7 +657,9 @@ async function resetMensual() {
 
 module.exports = {
   scopeDe,
-  EXCLUIDOS,
+  // Set de excluidos del tenant actual (se recalcula en cada acceso)
+  get EXCLUIDOS() { return excluidos(); },
+  excluidos,
   // puras
   normalizar,
   setPorcentaje,

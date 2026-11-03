@@ -1,9 +1,11 @@
 // utils/assign.js
 const pool = require('../db');
 
-// Índice único para round-robin en memoria (fallback simple, sin ponderar).
+const { perTenant } = require('../tenancy/state');
+
+// Índice para round-robin en memoria (fallback simple, sin ponderar), uno por tenant.
 // Para reparto por porcentaje entre equipos, ver services/distribucion.service.js
-let globalRoundRobinIndex = 0;
+const rr = perTenant('assign.roundRobin', () => ({ index: 0 }));
 
 // Asigna de forma equitativa a TODOS los vendedores activos
 const getAssignedVendorByBrand = async (marca) => {
@@ -25,12 +27,12 @@ const getAssignedVendorByBrand = async (marca) => {
 
     console.log(`👥 Vendedores disponibles: ${vendors.length}`);
 
-    const selectedVendor = vendors[globalRoundRobinIndex % vendors.length];
-    globalRoundRobinIndex = (globalRoundRobinIndex + 1) % vendors.length;
+    const selectedVendor = vendors[rr().index % vendors.length];
+    rr().index = (rr().index + 1) % vendors.length;
 
     console.log(`✅ Lead [${marca?.toUpperCase() || 'SIN MARCA'}] → Vendedor ${selectedVendor.id} (${selectedVendor.name})`);
     console.log(`   📊 Tiene ${selectedVendor.total_leads} leads totales`);
-    console.log(`   🔄 Índice actual: ${globalRoundRobinIndex - 1}/${vendors.length - 1} | Próximo: ${globalRoundRobinIndex}`);
+    console.log(`   🔄 Índice actual: ${rr().index - 1}/${vendors.length - 1} | Próximo: ${rr().index}`);
 
     return selectedVendor.id;
   } catch (error) {
@@ -44,7 +46,7 @@ const getNextVendorId = async () => {
 };
 
 const resetRoundRobinIndex = () => {
-  globalRoundRobinIndex = 0;
+  rr().index = 0;
   console.log('🔄 Índice round-robin reseteado a 0');
 };
 
@@ -70,17 +72,17 @@ const getRoundRobinStatus = async () => {
     if (vendors.length === 0) {
       return {
         totalVendedoresActivos: 0,
-        indiceActual: globalRoundRobinIndex,
+        indiceActual: rr().index,
         proximoVendedor: null,
         todosLosVendedores: []
       };
     }
 
-    const nextVendor = vendors[globalRoundRobinIndex % vendors.length];
+    const nextVendor = vendors[rr().index % vendors.length];
 
     return {
       totalVendedoresActivos: vendors.length,
-      indiceActual: globalRoundRobinIndex,
+      indiceActual: rr().index,
       proximoVendedor: {
         id: nextVendor.id,
         nombre: nextVendor.name,

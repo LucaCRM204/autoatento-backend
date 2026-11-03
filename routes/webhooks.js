@@ -20,9 +20,11 @@
  *      distribucion_equipos; si no, round-robin dentro del equipo)
  *   - sin ownerId                -> round-robin general, como antes
  *
- * Autenticación: header `x-api-key`, validado contra LEAD_API_KEYS en
- * el .env (ver middleware/intakeAuth.js). Formato de esa variable:
- *   whatsapp-bot:clave123;zapier-formularios:clave456
+ * URL multi-tenant: /api/t/<slug>/webhooks/<ruta> (o header X-Tenant).
+ *
+ * Autenticación: header `x-api-key`, validado contra las keys del tenant
+ * (tenants.config.lead_api_keys, cifradas; ver middleware/intakeAuth.js):
+ *   { "whatsapp-bot": "clave123", "zapier-formularios": "clave456" }
  *
  * Para agregar más fuentes en el futuro, el patrón es: duplicar uno de
  * estos dos bloques, cambiar la ruta y el nombre del provider en
@@ -34,11 +36,15 @@ const express = require('express');
 const pool = require('../db');
 const intakeAuth = require('../middleware/intakeAuth');
 const dist = require('../services/distribucion.service');
+const { emitTenant } = require('../tenancy/realtime');
+const { perTenant } = require('../tenancy/state');
+const { tenantConfig } = require('../tenancy/settings');
 const router = express.Router();
 
 // Round-robin parejo de emergencia, para cuando no hay ningún equipo
-// configurado en distribucion_equipos todavía.
-let roundRobinIndex = 0;
+// configurado en distribucion_equipos todavía. Uno por tenant, junto con el
+// round-robin por equipo (cuando el equipo no usa distribución ponderada).
+const rr = perTenant('webhooks.roundRobin', () => ({ index: 0, porEquipo: new Map() }));
 
 async function getVendedoresActivos() {
   const [rows] = await pool.execute(
@@ -64,15 +70,14 @@ async function asignarVendedor(leadId, fuente) {
   const vendedores = await getVendedoresActivos();
   if (vendedores.length === 0) return null;
 
-  const vendedor = vendedores[roundRobinIndex % vendedores.length];
-  roundRobinIndex = (roundRobinIndex + 1) % vendedores.length;
+  const estado = rr();
+  const vendedor = vendedores[estado.index % vendedores.length];
+  estado.index = (estado.index + 1) % vendedores.length;
 
   console.log(`[${fuente}] Lead #${leadId || '?'} -> ${vendedor.name} (${vendedor.id})`);
   return vendedor.id;
 }
 
-// Round-robin por equipo (cuando el equipo no usa distribución ponderada)
-const roundRobinPorEquipo = new Map();
 
 /**
  * Asignación de un lead del bot según de quién es el número de WhatsApp.
@@ -105,8 +110,9 @@ async function asignarLeadBot(ownerId) {
 
   const equipo = await dist.getVendedoresDeEquipo(owner.id);
   if (equipo.length) {
-    const i = (roundRobinPorEquipo.get(owner.id) || 0) % equipo.length;
-    roundRobinPorEquipo.set(owner.id, (i + 1) % equipo.length);
+    const porEquipo = rr().porEquipo;
+    const i = (porEquipo.get(owner.id) || 0) % equipo.length;
+    porEquipo.set(owner.id, (i + 1) % equipo.length);
     return { userId: equipo[i].id, motivo: `round-robin del equipo de ${owner.name}` };
   }
 
@@ -158,7 +164,7 @@ router.post('/whatsapp-bot', intakeAuth, async (req, res) => {
     // Emitir en tiempo real, igual que hace el middleware de server.js para /api/leads
     const io = req.app.get('io');
     if (io && lead) {
-      io.emit('lead:created', lead);
+      emitTenant('lead:created', lead);
     }
 
     res.json({
@@ -219,7 +225,7 @@ router.post('/zapier-formularios', intakeAuth, async (req, res) => {
 
     const io = req.app.get('io');
     if (io && lead) {
-      io.emit('lead:created', lead);
+      emitTenant('lead:created', lead);
     }
 
     res.json({
@@ -238,8 +244,9 @@ router.post('/zapier-formularios', intakeAuth, async (req, res) => {
 // ========================================
 // POST /api/webhooks/sheets
 // Leads que llegan desde Google Sheets (Apps Script).
-// Cada sheet tiene su propia API key en LEAD_API_KEYS y el nombre del
-// proveedor define la fuente del lead:
+// Cada sheet tiene su propia API key en las lead_api_keys del tenant y el
+// nombre del proveedor define la fuente del lead (cada tenant puede sumar
+// o pisar proveedores con tenants.config.sheet_fuentes):
 //   sheet-emanuel:CLAVE   -> fuente 'Emanuel'
 //   sheet-fastlead:CLAVE  -> fuente 'fast_lead'
 // Antiduplicado: si el mismo teléfono ya entró por la misma fuente en las
@@ -254,7 +261,7 @@ const limpiarTelefono = (t) => String(t || '').replace(/[^\d+]/g, '');
 
 router.post('/sheets', intakeAuth, async (req, res) => {
   try {
-    const fuente = FUENTE_POR_PROVIDER[req.provider];
+    const fuente = { ...FUENTE_POR_PROVIDER, ...(tenantConfig('sheet_fuentes') || {}) }[req.provider];
     if (!fuente) {
       return res.status(403).json({ error: `La key de "${req.provider}" no es de un sheet` });
     }
@@ -309,7 +316,7 @@ router.post('/sheets', intakeAuth, async (req, res) => {
     const lead = leadRows[0] || null;
 
     const io = req.app.get('io');
-    if (io && lead) io.emit('lead:created', lead);
+    if (io && lead) emitTenant('lead:created', lead);
 
     res.json({ ok: true, leadId: result.insertId, assignedTo: assigned_to, fuente });
   } catch (error) {
@@ -325,7 +332,7 @@ router.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    roundRobinIndex
+    roundRobinIndex: rr().index
   });
 });
 

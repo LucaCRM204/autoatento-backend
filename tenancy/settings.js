@@ -28,9 +28,21 @@ function tenantSecret(key, envVar = null, def = undefined) {
   return def;
 }
 
+/**
+ * Bot de WhatsApp del tenant: { url, key }. Sale de tenants.config
+ * (wa_bot_url / wa_bot_key cifrada) con fallback a WA_BOT_URL / WA_BOT_KEY.
+ * Sin default hardcodeado: antes caía al bot de Fiat.
+ */
+function waBot() {
+  return {
+    url: String(tenantConfig('wa_bot_url', 'WA_BOT_URL', '') || '').replace(/\/$/, ''),
+    key: tenantSecret('wa_bot_key', 'WA_BOT_KEY', '') || '',
+  };
+}
+
 /** Nombre visible del tenant (branding), con fallback a AutoAtento. */
 function tenantNombre(tenant = currentTenant()) {
   return tenant?.branding?.nombre || tenant?.nombre || 'AutoAtento';
 }
 
-module.exports = { tenantConfig, tenantSecret, tenantNombre };
+module.exports = { tenantConfig, tenantSecret, tenantNombre, waBot };

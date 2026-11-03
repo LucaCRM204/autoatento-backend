@@ -6,17 +6,18 @@
  * wa_conversations, que escribe el bot) y manda mensajes a través del bot.
  * Todo con el login del CRM: cada usuario ve solo los leads que le tocan.
  *
- * Variables (las mismas del Agente IA):
- *   WA_BOT_URL  default https://api.crmalluma.com.ar/wa-fiat
- *   WA_BOT_KEY  = AGENT_BOT_KEY del .env del bot
+ * Bot por tenant (los mismos datos que usa el Agente IA):
+ *   tenants.config.wa_bot_url / wa_bot_key  (fallback: WA_BOT_URL / WA_BOT_KEY)
+ *   wa_bot_key = AGENT_BOT_KEY del .env del bot
  */
 const express = require('express');
 const axios = require('axios');
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
 
+const { waBot } = require('../tenancy/settings');
+
 const router = express.Router();
-const WA_BOT_URL = (process.env.WA_BOT_URL || 'https://api.crmalluma.com.ar/wa-fiat').replace(/\/$/, '');
 
 const digits = (s) => String(s || '').replace(/\D/g, '');
 const clave = (tel) => digits(tel).slice(-10);
@@ -108,7 +109,8 @@ router.get('/leads/:leadId', authenticateToken, async (req, res) => {
 async function enviarPorBot(req, res, extra) {
   const { lead, error } = await leadAccesible(req, parseInt(req.params.leadId, 10));
   if (error) return responderError(res, error);
-  if (!process.env.WA_BOT_KEY) return res.status(500).json({ ok: false, error: 'Falta WA_BOT_KEY en el backend' });
+  const bot = waBot();
+  if (!bot.url || !bot.key) return res.status(500).json({ ok: false, error: 'El bot de WhatsApp no está configurado para esta cuenta (wa_bot_url / wa_bot_key)' });
 
   const { phone, session } = await charlaDelLead(lead);
   // Si ya chatearon, se responde desde el mismo número; si no, desde el del vendedor asignado
@@ -116,13 +118,13 @@ async function enviarPorBot(req, res, extra) {
   if (!userId) return res.status(409).json({ ok: false, error: 'El lead no tiene vendedor asignado' });
 
   try {
-    await axios.post(`${WA_BOT_URL}/api/agent/send`, {
+    await axios.post(`${bot.url}/api/agent/send`, {
       userId,
       phone: phone || telefonoWhatsApp(lead.telefono),
       leadId: lead.id,
       sentBy: 'vendedor',
       ...extra,
-    }, { headers: { 'x-agent-key': process.env.WA_BOT_KEY }, timeout: 30000, maxBodyLength: 20 * 1024 * 1024 });
+    }, { headers: { 'x-agent-key': bot.key }, timeout: 30000, maxBodyLength: 20 * 1024 * 1024 });
     res.json({ ok: true });
   } catch (e) {
     const msg = e.response?.data?.error || 'El bot de WhatsApp no respondió';
