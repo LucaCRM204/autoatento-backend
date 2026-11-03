@@ -7,14 +7,36 @@
  * - 10 min para aceptar → Si no acepta, pasa al siguiente
  * - Solo en horario laboral (9:30 - 19:30)
  * - Si todos rechazan, vuelve al primero
+ *
+ * MULTI-TENANT:
+ * - Handshake: auth = { token, tenant: <slug> }. El tid del token tiene que
+ *   ser el del tenant. Cada socket entra a tenant:<id> y tenant:<id>:user:<uid>.
+ * - Todos los handlers corren dentro del contexto del tenant del socket.
+ * - Ningún evento sale a otro tenant (emitTenant / socket.to(room)).
+ * - Presencia separada por tenant (los user ids se repiten entre bases).
  */
 
 const { Server } = require('socket.io');
+const jwt = require('jsonwebtoken');
+const {
+  runWithTenant, currentTenant, requireTenant, emitTenant, emitTenantUser,
+  tenantRoom, userRoom, setIO, everyTenant, nowInTz, registry,
+} = require('./tenancy');
+const { findTenant } = require('./tenancy/middleware');
 
 // Almacenamiento en memoria
-const connectedUsers = new Map();
-const userSessions = new Map();
+const connectedUsers = new Map(); // socket.id -> datos (incluye tenantId)
+const userSessions = new Map();   // "<tenantId>:<userId>" -> Set(socket.id)
 const activityLog = [];
+
+/** Clave de sesión de un usuario dentro del tenant actual. */
+const sessionKey = (userId, tenantId = requireTenant('presencia').id) => `${tenantId}:${userId}`;
+
+/** Tenant del socket (versión más reciente del registro, si está en caché). */
+const tenantOf = (socket) => registry.peekById(socket.data.tenant.id) || socket.data.tenant;
+
+/** Envuelve un handler para que corra en el contexto del tenant del socket. */
+const enTenant = (socket, fn) => (...args) => runWithTenant(tenantOf(socket), () => fn(...args));
 
 // Configuración
 const ACCEPTANCE_TIMEOUT_MINUTES = 10;
@@ -24,16 +46,17 @@ const WORK_HOURS = {
 };
 
 /**
- * Verifica si estamos en horario laboral
+ * Verifica si estamos en horario laboral, en la zona horaria del tenant
+ * (antes usaba la hora del servidor: en Railway eso es UTC).
  */
 function isWorkingHours() {
-  const now = new Date();
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const now = nowInTz();
+  const currentMinutes = now.hour * 60 + now.minute;
   const startMinutes = WORK_HOURS.start.hour * 60 + WORK_HOURS.start.minute;
   const endMinutes = WORK_HOURS.end.hour * 60 + WORK_HOURS.end.minute;
-  
+
   // También verificar que sea día de semana (1-5 = Lun-Vie)
-  const dayOfWeek = now.getDay();
+  const dayOfWeek = now.weekday;
   const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
   
   return isWeekday && currentMinutes >= startMinutes && currentMinutes <= endMinutes;
@@ -53,17 +76,32 @@ function initSocketServer(httpServer, pool) {
     pingInterval: 25000
   });
 
-  // Middleware de autenticación
+  setIO(io);
+
+  // Middleware de autenticación: token + tenant
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth.token;
       if (!token) {
         return next(new Error('Autenticación requerida'));
       }
-      
-      const jwt = require('jsonwebtoken');
+
+      const slug = String(
+        socket.handshake.auth.tenant || socket.handshake.auth.slug ||
+        socket.handshake.query?.tenant || socket.handshake.headers['x-tenant'] || ''
+      ).trim().toLowerCase();
+      if (!slug) return next(new Error('Falta el tenant'));
+
+      const tenant = await findTenant(slug);
+      if (!tenant || tenant.estado === 'baja') return next(new Error('Tenant inexistente'));
+      if (tenant.estado === 'suspendido') return next(new Error('Cuenta suspendida, contactá a AutoAtento'));
+
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      
+      if (Number(decoded.tid) !== Number(tenant.id)) {
+        return next(new Error('Token de otra cuenta: volvé a iniciar sesión'));
+      }
+
+      socket.data.tenant = tenant;
       socket.userId = decoded.id || decoded.userId;
       socket.userName = decoded.name;
       socket.userRole = decoded.role;
@@ -75,72 +113,78 @@ function initSocketServer(httpServer, pool) {
     }
   });
 
-  io.on('connection', (socket) => {
+  io.on('connection', (socket) => runWithTenant(tenantOf(socket), () => {
     const { userId, userName, userRole } = socket;
-    console.log(`✅ Usuario conectado: ${userName} (ID: ${userId}, Role: ${userRole})`);
+    const tid = socket.data.tenant.id;
+    const room = tenantRoom(tid);
+    console.log(`✅ Usuario conectado: ${userName} (ID: ${userId}, Role: ${userRole}, tenant: ${socket.data.tenant.slug})`);
+
+    socket.join(room);
+    socket.join(userRoom(tid, userId));
 
     handleUserConnect(socket, io, pool);
 
     // ===== EVENTOS DE LEADS =====
-    
-    socket.on('lead:created', (lead) => {
-      console.log(`📥 Nuevo lead creado: ${lead.nombre}`);
-      socket.broadcast.emit('lead:created', lead);
-    });
+    // (los reenvíos van solo a los demás sockets del mismo tenant)
 
-    socket.on('lead:updated', (lead) => {
-      console.log(`📝 Lead actualizado: ${lead.nombre} (ID: ${lead.id})`);
-      socket.broadcast.emit('lead:updated', lead);
-    });
+    socket.on('lead:created', enTenant(socket, (lead) => {
+      console.log(`📥 Nuevo lead creado: ${lead?.nombre}`);
+      socket.to(room).emit('lead:created', lead);
+    }));
 
-    socket.on('lead:deleted', (leadId) => {
+    socket.on('lead:updated', enTenant(socket, (lead) => {
+      console.log(`📝 Lead actualizado: ${lead?.nombre} (ID: ${lead?.id})`);
+      socket.to(room).emit('lead:updated', lead);
+    }));
+
+    socket.on('lead:deleted', enTenant(socket, (leadId) => {
       console.log(`🗑️ Lead eliminado: ID ${leadId}`);
-      socket.broadcast.emit('lead:deleted', leadId);
-    });
+      socket.to(room).emit('lead:deleted', leadId);
+    }));
 
     // ===== NUEVO: ACEPTAR LEAD =====
-    socket.on('lead:accept', async ({ leadId }) => {
+    socket.on('lead:accept', enTenant(socket, async ({ leadId } = {}) => {
       console.log(`✅ Usuario ${userId} aceptó lead ${leadId}`);
       await handleLeadAcceptance(io, pool, leadId, userId, 'accepted');
-    });
+    }));
 
     // ===== NUEVO: RECHAZAR LEAD =====
-    socket.on('lead:reject', async ({ leadId }) => {
+    socket.on('lead:reject', enTenant(socket, async ({ leadId } = {}) => {
       console.log(`❌ Usuario ${userId} rechazó lead ${leadId}`);
       await handleLeadAcceptance(io, pool, leadId, userId, 'rejected');
-    });
+    }));
 
     // ===== EVENTOS DE PRESENCIA =====
-    
-    socket.on('presence:heartbeat', () => {
+
+    socket.on('presence:heartbeat', enTenant(socket, () => {
       updateUserActivity(userId);
-    });
+    }));
 
-    socket.on('presence:active', () => {
+    socket.on('presence:active', enTenant(socket, () => {
       updateUserPresence(socket, io, 'active');
-    });
+    }));
 
-    socket.on('presence:idle', () => {
+    socket.on('presence:idle', enTenant(socket, () => {
       updateUserPresence(socket, io, 'idle');
-    });
+    }));
 
     // ===== EVENTOS DE ALERTAS =====
-    
-    socket.on('alert:send', ({ targetUserId, alert }) => {
-      emitToUser(io, targetUserId, 'alert:received', alert);
-    });
 
-    socket.on('alert:broadcast', (alert) => {
-      io.emit('alert:received', alert);
-    });
+    socket.on('alert:send', enTenant(socket, ({ targetUserId, alert } = {}) => {
+      emitToUser(io, targetUserId, 'alert:received', alert);
+    }));
+
+    socket.on('alert:broadcast', enTenant(socket, (alert) => {
+      emitTenant('alert:received', alert);
+    }));
 
     // ===== DESCONEXIÓN =====
-    
-    socket.on('disconnect', (reason) => {
+
+    socket.on('disconnect', enTenant(socket, (reason) => {
       console.log(`❌ Usuario desconectado: ${userName} (Razón: ${reason})`);
       handleUserDisconnect(socket, io, pool);
-    });
-  });
+    }));
+  }));
 
   // Iniciar el checker de timeouts de aceptación
   startAcceptanceChecker(io, pool);
@@ -261,13 +305,13 @@ async function handleLeadAcceptance(io, pool, leadId, userId, action) {
         WHERE l.id = ?
       `, [leadId]);
 
-      io.emit('lead:assigned', {
+      emitTenant('lead:assigned', {
         lead: updatedLead,
         vendedorId: userId,
         timestamp: new Date().toISOString()
       });
 
-      io.emit('lead:updated', updatedLead);
+      emitTenant('lead:updated', updatedLead);
 
       console.log(`✅ Lead ${leadId} aceptado por vendedor ${userId}`);
 
@@ -398,12 +442,12 @@ async function passLeadToNextVendor(io, pool, lead, currentUserId) {
 }
 
 /**
- * Checker que corre cada 30 segundos para verificar timeouts
+ * Checker que corre cada 30 segundos para verificar timeouts (en cada tenant activo)
  */
 function startAcceptanceChecker(io, pool) {
   console.log(`⏰ Checker de aceptación iniciado (timeout: ${ACCEPTANCE_TIMEOUT_MINUTES} min)`);
-  
-  setInterval(async () => {
+
+  everyTenant('aceptacion', 30000, async () => {
     if (!pool) return;
     
     try {
@@ -444,10 +488,10 @@ function startAcceptanceChecker(io, pool) {
     } catch (err) {
       // Silenciar errores si las columnas no existen aún
       if (!err.message.includes('Unknown column')) {
-        console.error('Error en acceptance checker:', err);
+        console.error(`Error en acceptance checker [${currentTenant()?.slug}]:`, err);
       }
     }
-  }, 30000); // Cada 30 segundos
+  }); // Cada 30 segundos
 }
 
 // ============================================
@@ -478,7 +522,11 @@ async function handleUserConnect(socket, io, pool) {
   const { userId, userName, userRole } = socket;
   const now = new Date();
 
+  const tenantId = socket.data.tenant.id;
+  const key = sessionKey(userId, tenantId);
+
   connectedUsers.set(socket.id, {
+    tenantId,
     odUserId: userId,
     odUserName: userName,
     role: userRole,
@@ -487,16 +535,16 @@ async function handleUserConnect(socket, io, pool) {
     status: 'active'
   });
 
-  if (!userSessions.has(userId)) {
-    userSessions.set(userId, new Set());
+  if (!userSessions.has(key)) {
+    userSessions.set(key, new Set());
   }
-  userSessions.get(userId).add(socket.id);
+  userSessions.get(key).add(socket.id);
 
   await logSessionStart(pool, userId);
 
   logActivity(userId, 'connected', { socketId: socket.id });
 
-  socket.broadcast.emit('presence:user_online', {
+  socket.to(tenantRoom(tenantId)).emit('presence:user_online', {
     odUserId: userId,
     odUserName: userName,
     role: userRole,
@@ -507,8 +555,7 @@ async function handleUserConnect(socket, io, pool) {
   socket.emit('presence:users_list', getOnlineUsers());
 
   // Emit users:online for useRealtime compatibility
-  const onlineIds = Array.from(userSessions.keys());
-  io.emit('users:online', onlineIds);
+  emitTenant('users:online', onlineUserIds());
 
   // Verificar si hay leads pendientes de aceptación para este usuario
   if (pool) {
@@ -542,26 +589,26 @@ async function handleUserDisconnect(socket, io, pool) {
   const userData = connectedUsers.get(socket.id);
 
   connectedUsers.delete(socket.id);
+  const key = sessionKey(userId, socket.data.tenant.id);
 
-  if (userSessions.has(userId)) {
-    userSessions.get(userId).delete(socket.id);
-    
-    if (userSessions.get(userId).size === 0) {
-      userSessions.delete(userId);
-      
+  if (userSessions.has(key)) {
+    userSessions.get(key).delete(socket.id);
+
+    if (userSessions.get(key).size === 0) {
+      userSessions.delete(key);
+
       if (userData) {
         await logSessionEnd(pool, userId, userData.connectedAt);
       }
 
-      io.emit('presence:user_offline', {
+      emitTenant('presence:user_offline', {
         odUserId: userId,
         odUserName: userName,
         disconnectedAt: new Date().toISOString()
       });
 
       // Emit users:online for useRealtime compatibility
-      const onlineIds = Array.from(userSessions.keys());
-      io.emit('users:online', onlineIds);
+      emitTenant('users:online', onlineUserIds());
 
       logActivity(userId, 'disconnected', {});
     }
@@ -574,7 +621,7 @@ function updateUserPresence(socket, io, status) {
     userData.status = status;
     userData.lastActivity = new Date();
     
-    io.emit('presence:user_status_changed', {
+    emitTenant('presence:user_status_changed', {
       odUserId: socket.userId,
       status: status,
       lastActivity: userData.lastActivity.toISOString()
@@ -583,7 +630,7 @@ function updateUserPresence(socket, io, status) {
 }
 
 function updateUserActivity(userId) {
-  userSessions.get(userId)?.forEach(socketId => {
+  userSessions.get(sessionKey(userId))?.forEach(socketId => {
     const userData = connectedUsers.get(socketId);
     if (userData) {
       userData.lastActivity = new Date();
@@ -591,10 +638,21 @@ function updateUserActivity(userId) {
   });
 }
 
+/** Ids de usuarios conectados del tenant actual. */
+function onlineUserIds() {
+  const prefix = `${requireTenant('presencia').id}:`;
+  return Array.from(userSessions.keys())
+    .filter((k) => k.startsWith(prefix))
+    .map((k) => Number(k.slice(prefix.length)));
+}
+
+/** Usuarios conectados del tenant actual. */
 function getOnlineUsers() {
+  const tenantId = requireTenant('getOnlineUsers').id;
   const users = new Map();
-  
+
   connectedUsers.forEach((data, socketId) => {
+    if (data.tenantId !== tenantId) return;
     if (!users.has(data.odUserId) || users.get(data.odUserId).lastActivity < data.lastActivity) {
       users.set(data.odUserId, {
         odUserId: data.odUserId,
@@ -603,7 +661,7 @@ function getOnlineUsers() {
         status: data.status,
         connectedAt: data.connectedAt.toISOString(),
         lastActivity: data.lastActivity.toISOString(),
-        sessionsCount: userSessions.get(data.odUserId)?.size || 1
+        sessionsCount: userSessions.get(sessionKey(data.odUserId, tenantId))?.size || 1
       });
     }
   });
@@ -617,6 +675,7 @@ function getOnlineUsers() {
 
 function logActivity(userId, action, data) {
   activityLog.push({
+    tenantId: currentTenant()?.id || null,
     userId,
     action,
     data,
@@ -667,13 +726,9 @@ async function logSessionEnd(pool, userId, connectedAt) {
 // UTILIDADES
 // ============================================
 
-function emitToUser(io, userId, event, data) {
-  const sockets = userSessions.get(userId);
-  if (sockets) {
-    sockets.forEach(socketId => {
-      io.to(socketId).emit(event, data);
-    });
-  }
+/** Emite a un usuario del tenant actual (firma vieja: el io se ignora). */
+function emitToUser(_io, userId, event, data) {
+  emitTenantUser(userId, event, data);
 }
 
 // ============================================
