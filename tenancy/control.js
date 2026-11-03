@@ -17,6 +17,7 @@ function getControlPool() {
       connectionLimit: Number(process.env.CONTROL_POOL_LIMIT) || 5,
       queueLimit: 0,
       enableKeepAlive: true,
+      timezone: 'Z', // ver tenancy/pools.js
     });
   }
   return pool;

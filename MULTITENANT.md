@@ -147,6 +147,7 @@ No hay ninguna marca hardcodeada:
 | `asignar_tareas` | prendido | `/api/tareas` | Menú "Asignar Tareas" (Mis Tareas sigue, con los recordatorios) |
 | `ranking` | prendido | — | Menú "Ranking" |
 | `analytics` | prendido | — | Menú "Análisis Diario" |
+| `aceptacion_leads` *(futuro, no implementado como flag)* | — | Flujo de ofertas: el lead se ofrece a un vendedor que tiene 10 min para aceptarlo (`socket-server.js`, `/api/leads/:id/accept|reject`, `LeadAcceptanceModal.tsx`). **Queda apagado**: el CRM no lo dispara (nadie llama a `initiateLeadOffer` y el modal no está montado). El checker sigue corriendo pero sin ofertas pendientes no hace nada. Si algún cliente lo quiere, se convierte en módulo y se monta el modal | — |
 | `multi_marca`, `motos`, `scoring` | apagado | — | Sin UI en el CRM base. **Se definen al migrar GoldPlan** (qué pantallas y reglas activa cada uno); hasta entonces son flags reservados |
 
 ## 4. Tiempo real (Socket.io)
@@ -366,6 +367,7 @@ npm.cmd run tenant:add -- --slug fiat-autodelsol --nombre "Auto del Sol Fiat" --
 | `002_wa_messages_sent_by` | Columna `wa_messages.sent_by` si no existe |
 | `003_leads_marca_varchar` | `leads.marca` de `ENUM('fiat')` a `VARCHAR(30)`, sin default (la marca la pone el backend). Solo si sigue siendo ENUM; conserva los valores. **Reconstruye la tabla `leads`: correrla fuera de horario** |
 | `004_user_logins` | Registro de logins, para el uso mensual |
+| `005_recordatorios_completed_at` | Columna `recordatorios.completed_at` si no existe (la usa "completar recordatorio"; en una base nueva fallaba) |
 
 ```bash
 npm run migrate                                        # tenants activos
@@ -535,7 +537,7 @@ Usa `TENANT_DB_KEY_ANTERIOR` como key vieja y `TENANT_DB_KEY` como nueva.
 **Server real:** se levanta en un puerto libre con estas variables (solo para tests):
 - `TENANTS_SOLO_PREFIJO=test-<run>-`: las tareas en segundo plano procesan solo los tenants de la corrida, no los de `dev:seed`;
 - `ACCEPTANCE_CHECK_MS=2000`: el checker de aceptación corre cada 2 s en vez de 30 s;
-- `TZ=UTC`: igual que Railway.
+- (ya no hace falta `TZ`: ver "Fechas y zonas horarias" más abajo).
 
 **Qué cubre (51 tests):**
 
@@ -551,10 +553,11 @@ Usa `TENANT_DB_KEY_ANTERIOR` como key vieja y `TENANT_DB_KEY` como nueva.
 | Superadmin | Sin token → 401; contraseña mala → 401; token de un owner → 401 (con o sin `X-Tenant`); el token del panel no sirve en un CRM; la lista no expone secretos |
 | Tenancy | `db` sin tenant → `NO_TENANT`; `emitTenant` sin tenant descarta; el server no logueó ninguna consulta sin tenant |
 
-**`TZ=UTC` en desarrollo:**
-- **Dónde se nota:** el flujo de aceptación de leads guarda la fecha de vencimiento calculada en JS; mysql2 la serializa en la zona horaria del proceso y después se compara con `NOW()` de MySQL (UTC).
-- **En Railway:** el proceso está en UTC y coincide.
-- **En una PC en hora de Argentina:** sin `TZ=UTC`, cada oferta nace "vencida" y rota sin parar entre vendedores. Por eso `TZ=UTC` está en `.env.example`.
+**Fechas y zonas horarias** (no depende de la zona del proceso de Node):
+- **Vencimientos y comparaciones con "ahora":** se calculan en MySQL (`NOW() + INTERVAL`, `acceptance_expires_at < NOW()`, `completed_at = NOW()`).
+- **mysql2:** usa `timezone: 'Z'` (las bases guardan UTC). Es lo mismo que pasaba en Railway con el proceso en UTC, pero ahora también vale en una PC en hora de Argentina.
+- **Fechas "de calendario" del tenant** (recordatorios, horarios, corte de mes): usan la zona horaria del tenant (`nowInTz`).
+- **Tests:** 53 tests pasan sin `TZ=UTC`, con el proceso en `America/Buenos_Aires`. Hay un test que verifica que una oferta pasada a otro vendedor no siga rotando.
 
 ## 14. Migrar un cliente existente
 

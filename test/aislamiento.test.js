@@ -15,6 +15,7 @@ const jwt = require('jsonwebtoken');
 const { io: ioClient } = require('socket.io-client');
 const E = require('../testing/entorno');
 const { levantarServer } = require('../scripts/lib/test-server');
+const { listMigrations } = require('../tenancy/migrate');
 
 let srv;
 let A; // tenant con todos los módulos
@@ -61,6 +62,7 @@ before(async () => {
   tok.B = (await login(B)).token;
   const vA = await login(A, 'vend1@test.local');
   tok.vendA = vA.token;
+  tok.vendB = (await login(B, 'vend1@test.local')).token;
 });
 
 after(async () => {
@@ -70,8 +72,8 @@ after(async () => {
 
 describe('setup', () => {
   it('cada tenant de prueba se creó con todas las migraciones y su owner', () => {
-    assert.equal(A.migraciones.aplicadas.length, 5);
-    assert.equal(B.migraciones.aplicadas.length, 5);
+    assert.equal(A.migraciones.aplicadas.length, listMigrations().length);
+    assert.equal(B.migraciones.aplicadas.length, listMigrations().length);
   });
 });
 
@@ -223,6 +225,12 @@ describe('loops en segundo plano por tenant', () => {
       return a.current_offer_to === A.ids.v2 && b.current_offer_to === B.ids.v2;
     }, { ms: 30000 });
     assert.ok(listo, `la oferta vencida no pasó a vend2 en los dos tenants: ${JSON.stringify(estado)}`);
+    // La oferta nueva vence en 10 minutos (NOW() + INTERVAL en MySQL): no tiene
+    // que seguir rotando, sin importar la zona horaria del proceso de Node.
+    await new Promise((res) => setTimeout(res, 5000));
+    const [a2] = await E.enBase(A, 'SELECT current_offer_to, TIMESTAMPDIFF(MINUTE, NOW(), acceptance_expires_at) AS faltan FROM leads WHERE id = ?', [A.ids.ofertado]);
+    assert.equal(a2.current_offer_to, A.ids.v2, 'la oferta siguió rotando entre vendedores');
+    assert.ok(a2.faltan >= 8 && a2.faltan <= 10, `vencimiento fuera de rango: faltan ${a2.faltan} min`);
     const logA = await E.enBase(A, "SELECT COUNT(*) AS n FROM lead_acceptance_log WHERE lead_id = ? AND action = 'timeout'", [A.ids.ofertado]);
     const logB = await E.enBase(B, "SELECT COUNT(*) AS n FROM lead_acceptance_log WHERE lead_id = ? AND action = 'timeout'", [B.ids.ofertado]);
     assert.ok(logA[0].n >= 1 && logB[0].n >= 1);
@@ -238,6 +246,26 @@ describe('loops en segundo plano por tenant', () => {
     assert.equal(alertas.b.length, 1);
     assert.ok(alertas.a[0].message.includes(`Vencido ${A.marca}`) && !alertas.a[0].message.includes(B.marca));
     assert.ok(alertas.b[0].message.includes(`Vencido ${B.marca}`) && !alertas.b[0].message.includes(A.marca));
+  });
+});
+
+describe('fechas independientes de la zona horaria del proceso', () => {
+  it('completar un recordatorio guarda completed_at con la hora de MySQL', async () => {
+    const [rec] = await E.enBase(A, "SELECT id FROM recordatorios WHERE descripcion = ?", [`Recordatorio ${A.marca}`]);
+    const r = await comoA(api().put(`/api/recordatorios/recordatorios/${rec.id}`)).send({ completado: true });
+    assert.equal(r.status, 200, txt(r));
+    const [fila] = await E.enBase(A, 'SELECT completado, ABS(TIMESTAMPDIFF(SECOND, completed_at, NOW())) AS dif FROM recordatorios WHERE id = ?', [rec.id]);
+    assert.equal(Number(fila.completado), 1);
+    assert.ok(fila.dif < 60, `completed_at desfasado ${fila.dif} s`);
+  });
+  it('/recordatorios/verificar usa la hora local del tenant', async () => {
+    // verificar devuelve los recordatorios del usuario: el lead es de vend1
+    const r = await api().get('/api/recordatorios/recordatorios/verificar').set('X-Tenant', B.slug).set('Authorization', `Bearer ${tok.vendB}`);
+    assert.equal(r.status, 200, txt(r));
+    const desc = r.body.recordatorios.map((x) => x.descripcion);
+    // B está en America/Montevideo: el "vencido hace 5 min" aparece y el de mañana no
+    assert.ok(desc.includes(`Vencido ${B.marca}`), JSON.stringify(desc));
+    assert.ok(!desc.includes(`Recordatorio ${B.marca}`), JSON.stringify(desc));
   });
 });
 

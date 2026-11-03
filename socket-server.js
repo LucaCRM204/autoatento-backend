@@ -203,16 +203,18 @@ function initSocketServer(httpServer, pool) {
  * Ofrece un lead a un vendedor específico
  */
 async function offerLeadToVendor(io, pool, lead, vendorId) {
+  // Para avisarle al vendedor (instante absoluto, no depende de zonas horarias)
   const expiresAt = new Date(Date.now() + ACCEPTANCE_TIMEOUT_MINUTES * 60 * 1000);
-  
-  // Actualizar lead con la oferta
+
+  // El vencimiento se calcula en MySQL (NOW() + INTERVAL) porque el checker
+  // lo compara con NOW(): así no depende de la zona horaria del proceso.
   await pool.execute(`
-    UPDATE leads 
+    UPDATE leads
     SET pending_acceptance = TRUE,
         current_offer_to = ?,
-        acceptance_expires_at = ?
+        acceptance_expires_at = NOW() + INTERVAL ? MINUTE
     WHERE id = ?
-  `, [vendorId, expiresAt, lead.id]);
+  `, [vendorId, ACCEPTANCE_TIMEOUT_MINUTES, lead.id]);
 
   // Registrar en log
   try {

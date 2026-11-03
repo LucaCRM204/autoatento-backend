@@ -20,6 +20,10 @@ function createPool(url) {
     connectionLimit: env.TENANT_POOL_LIMIT,
     queueLimit: 0,
     enableKeepAlive: true,
+    // Las bases guardan UTC (NOW() de MySQL en Railway). Con 'Z', mysql2 lee y
+    // escribe las fechas de JS en UTC sin depender de la zona horaria del
+    // proceso (antes: 'local', que solo coincidía si el proceso corría en UTC).
+    timezone: 'Z',
   });
 }
 

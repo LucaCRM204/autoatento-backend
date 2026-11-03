@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const { nowInTz } = require('../tenancy/time');
 
 // ========================================
 // RECORDATORIOS - Sistema de recordatorios con notificaciones
@@ -129,11 +130,10 @@ router.put('/recordatorios/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Recordatorio no encontrado' });
     }
 
-    const completed_at = completado ? new Date() : null;
-
+    // completed_at con NOW() de MySQL (no la hora del proceso de Node)
     await pool.execute(
-      'UPDATE recordatorios SET completado = ?, completed_at = ? WHERE id = ?',
-      [completado, completed_at, id]
+      `UPDATE recordatorios SET completado = ?, completed_at = ${completado ? 'NOW()' : 'NULL'} WHERE id = ?`,
+      [completado, id]
     );
 
     const [recordatorioActualizado] = await pool.execute(
@@ -189,9 +189,8 @@ router.delete('/recordatorios/:id', authenticateToken, async (req, res) => {
 // GET verificar recordatorios que deben notificarse
 router.get('/recordatorios/verificar', authenticateToken, async (req, res) => {
   try {
-    const ahora = new Date();
-    const fechaHoy = ahora.toISOString().split('T')[0];
-    const horaActual = ahora.toTimeString().split(' ')[0].substring(0, 5);
+    // fecha y hora de los recordatorios están en la hora local del tenant
+    const ahora = nowInTz();
 
     const [recordatoriosPendientes] = await pool.execute(
       `SELECT 
@@ -202,10 +201,9 @@ router.get('/recordatorios/verificar', authenticateToken, async (req, res) => {
        FROM recordatorios r
        INNER JOIN leads l ON r.lead_id = l.id
        WHERE r.completado = FALSE
-         AND r.fecha <= ?
-         AND r.hora <= ?
+         AND TIMESTAMP(r.fecha, r.hora) <= ?
          AND (r.created_by = ? OR l.assigned_to = ?)`,
-      [fechaHoy, horaActual, req.user.id, req.user.id]
+      [`${ahora.iso}:00`, req.user.id, req.user.id]
     );
 
     res.json({ ok: true, recordatorios: recordatoriosPendientes });

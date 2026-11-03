@@ -111,7 +111,7 @@ async function scanCambiosEstado(activo) {
 async function scanSLA(cfg) {
   const sla = cfg.sla_nuevo_min;
   const [rows] = await pool.execute(
-    `SELECT l.id, l.assigned_to, l.assigned_at, TIMESTAMPDIFF(MINUTE, l.assigned_at, NOW()) AS minutos
+    `SELECT l.id, l.assigned_to, l.assigned_at, UNIX_TIMESTAMP(l.assigned_at) AS assigned_ts, TIMESTAMPDIFF(MINUTE, l.assigned_at, NOW()) AS minutos
        FROM leads l
       WHERE l.estado = 'nuevo' AND l.assigned_to IS NOT NULL
         AND l.assigned_at < NOW() - INTERVAL ? MINUTE
@@ -122,7 +122,8 @@ async function scanSLA(cfg) {
       ORDER BY l.assigned_at LIMIT 50`, [sla, agentUserId()]);
   let n = 0;
   for (const l of rows) {
-    const ts = new Date(l.assigned_at).getTime();
+    // Clave estable calculada en MySQL (no depende de la zona horaria del proceso)
+    const ts = Number(l.assigned_ts) * 1000;
     const base = { minutos: l.minutos, assigned_to: l.assigned_to };
     // Nivel 1: aviso al vendedor. Nivel 2 (propuesta de reasignar) recién
     // cuando el aviso ya se procesó hace 2×SLA y el lead sigue igual: así

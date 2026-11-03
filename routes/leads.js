@@ -479,7 +479,9 @@ router.post('/:id/accept', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     const io = req.app.get('io');
 
-    const [rows] = await pool.execute('SELECT * FROM leads WHERE id = ?', [id]);
+    // "vencida" se calcula en MySQL contra NOW(), no en Node (zona horaria)
+    const [rows] = await pool.execute(
+      'SELECT *, (acceptance_expires_at IS NOT NULL AND acceptance_expires_at < NOW()) AS oferta_vencida FROM leads WHERE id = ?', [id]);
 
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Lead no encontrado' });
@@ -493,7 +495,7 @@ router.post('/:id/accept', authenticateToken, async (req, res) => {
     }
 
     // Verificar que no expiró
-    if (lead.acceptance_expires_at && new Date(lead.acceptance_expires_at) < new Date()) {
+    if (Number(lead.oferta_vencida)) {
       return res.status(400).json({ error: 'La oferta expiró' });
     }
 
@@ -627,15 +629,15 @@ router.post('/:id/reject', authenticateToken, async (req, res) => {
     }
 
     if (nextVendor) {
-      const newExpires = new Date(Date.now() + 10 * 60 * 1000);
+      const newExpires = new Date(Date.now() + 10 * 60 * 1000); // solo para el aviso al vendedor
 
       await pool.execute(`
-        UPDATE leads 
+        UPDATE leads
         SET acceptance_attempts = ?,
             current_offer_to = ?,
-            acceptance_expires_at = ?
+            acceptance_expires_at = NOW() + INTERVAL 10 MINUTE
         WHERE id = ?
-      `, [JSON.stringify(attempts), nextVendor.id, newExpires, id]);
+      `, [JSON.stringify(attempts), nextVendor.id, id]);
 
       // Notificar al siguiente vendedor
       if (io) {
