@@ -255,11 +255,15 @@ tenant. Para pasar a un bot multi-tenant haría falta:
 - **Alternativa:** la API oficial de WhatsApp Cloud, con un webhook de Meta
   que resuelva el tenant por `phone_number_id`.
 
-## 11. Bugs previos detectados (no son de multi-tenant, sin tocar)
+## 11. Bugs previos detectados
 
-- `GET /api/leads/unassigned` y `GET /api/leads/distribution` nunca se alcanzan: los tapa `GET /api/leads/:id`, que está definido antes en `routes/leads.js` (responden 404 "Lead no encontrado").
-- `GET /api/activity/reassignments` responde 500 en MySQL 8.0.22 o posterior: usa `LIMIT ?` con `execute()` (`ER_WRONG_ARGUMENTS`). `routes/alertas.js` ya tiene el arreglo (LIMIT inline validado).
-- Al desconectarse, el log del socket muestra `Usuario desconectado: undefined` porque el JWT no lleva `name`. Es solo cosmético.
+Corregidos (también en el repo de producción de Fiat):
+
+- `GET /api/leads/unassigned` y `GET /api/leads/distribution` quedaban tapadas por `GET /api/leads/:id`: ahora `/:id` está definida después.
+- `GET /api/activity/reassignments` daba 500 en MySQL 8.0.22 o posterior por `LIMIT ?` con `execute()`: ahora el LIMIT va dentro de la consulta, como un entero validado.
+- `CallPanel.tsx` (front) hacía POST a `/api/api/calls` (404 silencioso): ahora usa `${apiUrl}/calls`.
+
+Pendiente (cosmético): al desconectarse, el log del socket muestra `Usuario desconectado: undefined` porque el JWT no lleva `name`.
 
 ## 12. Pendiente
 

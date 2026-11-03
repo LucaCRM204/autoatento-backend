@@ -34,11 +34,8 @@ const avisos = [];
 
 // Bugs que ya estaban en el código original (no son de multi-tenant). Se
 // verifica que sigan respondiendo igual que antes y que no mezclen datos.
-const CONOCIDOS = {
-  '/leads/unassigned': { status: 404, motivo: 'la tapa GET /leads/:id, que está definida antes en routes/leads.js' },
-  '/leads/distribution': { status: 404, motivo: 'la tapa GET /leads/:id, que está definida antes en routes/leads.js' },
-  '/activity/reassignments': { status: 500, motivo: 'usa LIMIT ? con execute(): MySQL >= 8.0.22 lo rechaza (ER_WRONG_ARGUMENTS)' },
-};
+// (vacío: los 3 bugs previos que había se corrigieron)
+const CONOCIDOS = {};
 function check(nombre, ok, detalle = '') {
   resultados.push({ nombre, ok: !!ok, detalle });
   console.log(`${ok ? '✅' : '❌'} ${nombre}${!ok && detalle ? `  ->  ${detalle}` : ''}`);
